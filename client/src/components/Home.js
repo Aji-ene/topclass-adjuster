@@ -40,14 +40,14 @@ function Home() {
 
   const downloadReport = (report) => {
     if (report && report.filename) {
-      const url = `http://localhost:5000/api/files/download/${report.filename}`;
+      const url = `/api/files/download/${report.filename}`;
       window.location.href = url;
     }
   };
 
   return (
     <Container className="py-4">
-      <h1 className="mb-4">Insurance Claims Processing</h1>
+      <h1 className="mb-4">Topclass Adjusters Claims Processing</h1>
       <Row className="mb-4">
         <Col md={6}><FileUpload label="Questionnaire File" onFileSelect={setQuestionnaireFile} acceptedFormats={['.docx', '.pdf', '.txt']} /></Col>
         <Col md={6}><FileUpload label="Analyzed File" onFileSelect={setAnalyzedFile} acceptedFormats={['.docx', '.pdf', '.txt']} /></Col>
