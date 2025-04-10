@@ -40,7 +40,7 @@ function Home() {
 
   const downloadReport = (report) => {
     if (report && report.filename) {
-      const url = `/api/files/download/${report.filename}`;
+      const url = `../api/files/download/${report.filename}`;
       window.location.href = url;
     }
   };
