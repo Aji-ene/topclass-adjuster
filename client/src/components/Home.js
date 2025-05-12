@@ -41,7 +41,7 @@ function Home() {
   const downloadReport = (report) => {
     if (report && report.filename) {
       const baseUrl = process.env.REACT_APP_API_URL || '';
-      const url = `${BASEuRL}/api/files/download/${report.filename}`;
+      const url = `${baseUrl}/api/files/download/${report.filename}`;
       window.location.href = url;
     }
   };
