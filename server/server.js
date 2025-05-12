@@ -40,9 +40,9 @@ app.use('/api/claims', claimsRoutes);
 app.use('/api/files', fileRoutes);
 
 // Basic root route
-app.get('/', (req, res) => {
-  res.send('Topclass Adjuster API is live');
-});
+//app.get('/', (req, res) => {
+//  res.send('Topclass Adjuster API is live');
+//});
 
 // Serve React build (must come AFTER API routes)
 app.use(express.static(path.join(__dirname, '../client/build')));
