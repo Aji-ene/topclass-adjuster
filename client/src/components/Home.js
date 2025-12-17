@@ -1,8 +1,6 @@
 import React, { useState } from 'react';
 import {
   Container,
-  Row,
-  Col,
   Button,
   Alert,
   Form,
@@ -32,7 +30,7 @@ function Home() {
     Array.from({ length: 8 }, (_, i) => ({
       id: i + 1,
       value: '',
-      subpoints: [], // array of { id: unique, value: string }
+      subpoints: [],
     }))
   );
 
@@ -40,23 +38,22 @@ function Home() {
   const [fieldReport, setFieldReport] = useState(null);
   const [policyDocument, setPolicyDocument] = useState(null);
   const [endorsement, setEndorsement] = useState(null);
-  const [additionalDocs, setAdditionalDocs] = useState([]); // array of files
-  const [supportingDocs, setSupportingDocs] = useState([]); // array of files
+  const [additionalDocs, setAdditionalDocs] = useState([]);
+  const [supportingDocs, setSupportingDocs] = useState([]);
   const [photos, setPhotos] = useState([]);
+
+  // NEW: Checkbox to exclude AI photo handling
+  const [excludePhotosFromAI, setExcludePhotosFromAI] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [generatedReport, setGeneratedReport] = useState(null);
 
-  // Headline functions
+  // Headline functions (unchanged)
   const addHeadline = () => {
     setHeadlines([
       ...headlines,
-      {
-        id: headlines.length + 1,
-        value: '',
-        subpoints: [],
-      },
+      { id: headlines.length + 1, value: '', subpoints: [] },
     ]);
   };
 
@@ -65,19 +62,14 @@ function Home() {
   };
 
   const updateHeadline = (id, value) => {
-    setHeadlines(
-      headlines.map((h) => (h.id === id ? { ...h, value } : h))
-    );
+    setHeadlines(headlines.map((h) => (h.id === id ? { ...h, value } : h)));
   };
 
   const addSubpoint = (mainId) => {
     setHeadlines(
       headlines.map((h) =>
         h.id === mainId
-          ? {
-              ...h,
-              subpoints: [...h.subpoints, { id: Date.now(), value: '' }],
-            }
+          ? { ...h, subpoints: [...h.subpoints, { id: Date.now(), value: '' }] }
           : h
       )
     );
@@ -102,16 +94,13 @@ function Home() {
     setHeadlines(
       headlines.map((h) =>
         h.id === mainId
-          ? {
-              ...h,
-              subpoints: h.subpoints.filter((s) => s.id !== subId),
-            }
+          ? { ...h, subpoints: h.subpoints.filter((s) => s.id !== subId) }
           : h
       )
     );
   };
 
-  // File handling helpers
+  // File helpers
   const handleFileChange = (setter) => (e) => {
     const file = e.target.files[0];
     if (file) setter(file);
@@ -126,23 +115,16 @@ function Home() {
     setter((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const removePhoto = (index) => () => {
+    setPhotos((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const handleGenerate = async () => {
-    if (!classOfBusiness) {
-      setError('Please select Class of Business');
-      return;
-    }
-    if (!reportType) {
-      setError('Please select Report Type');
-      return;
-    }
-    if (!fieldReport) {
-      setError('Please upload the Field Report');
-      return;
-    }
-    if (reportType === 'final' && !policyDocument) {
-      setError('Please upload the Policy Document for Final Report');
-      return;
-    }
+    if (!classOfBusiness) return setError('Please select Class of Business');
+    if (!reportType) return setError('Please select Report Type');
+    if (!fieldReport) return setError('Please upload the Field Report');
+    if (reportType === 'final' && !policyDocument)
+      return setError('Please upload the Policy Document for Final Report');
 
     const formData = new FormData();
     formData.append('classOfBusiness', classOfBusiness);
@@ -151,7 +133,7 @@ function Home() {
       reportType === 'preliminary' ? 'interim' : 'final'
     );
 
-    // Send structured headlines (main + subpoints)
+    // Structured headlines
     const structuredHeadlines = headlines
       .filter((h) => h.value.trim() || h.subpoints.some((s) => s.value.trim()))
       .map((h) => ({
@@ -167,20 +149,24 @@ function Home() {
 
     formData.append('headlines', JSON.stringify(structuredHeadlines));
 
+    // NEW: Send photo handling instruction
+    formData.append('excludePhotosFromAI', excludePhotosFromAI);
+
     // Files
-    formData.append('questionnaire', fieldReport); // reused field name for compatibility
+    formData.append('questionnaire', fieldReport);
     if (reportType === 'final') {
       formData.append('analyzedFile', policyDocument);
       if (endorsement) formData.append('endorsement', endorsement);
     }
 
-    // Additional / Supporting docs
     [...additionalDocs, ...supportingDocs].forEach((file) =>
       formData.append('additionalDocs', file)
     );
 
-    // Photos
-    photos.forEach((photo) => formData.append('photos', photo));
+    // Only send photos if user did NOT exclude AI handling
+    if (!excludePhotosFromAI) {
+      photos.forEach((photo) => formData.append('photos', photo));
+    }
 
     setLoading(true);
     setError(null);
@@ -263,7 +249,7 @@ function Home() {
               {reportType === 'preliminary' ? 'Preliminary' : 'Final'} Report
             </h3>
 
-            {/* Field Report - common to both */}
+            {/* Field Report */}
             <Form.Group className="mb-4">
               <Form.Label>Upload Field Report</Form.Label>
               <Form.Control
@@ -330,13 +316,13 @@ function Home() {
               </Form.Group>
             )}
 
-            {/* Uploaded additional/supporting files list */}
+            {/* Additional files list */}
             {(additionalDocs.length > 0 || supportingDocs.length > 0) && (
               <div className="mb-4">
                 <strong>Uploaded Additional / Supporting Files:</strong>
                 <ul className="mt-2">
                   {[...additionalDocs, ...supportingDocs].map((file, idx) => (
-                    <li key={idx} className="d-flex align-items-center">
+                    <li key={idx} className="d-flex align-items-center py-1">
                       {file.name}
                       <Button
                         size="sm"
@@ -355,12 +341,11 @@ function Home() {
               </div>
             )}
 
-            {/* Report Arrangement - Headlines with Sub-points */}
+            {/* Report Arrangement */}
             <h5 className="mb-3">Select Report Arrangement</h5>
 
             {headlines.map((headline) => (
               <div key={headline.id} className="mb-4 border p-3 rounded bg-light">
-                {/* Main Headline */}
                 <Form.Group className="d-flex align-items-center mb-3">
                   <Form.Label className="me-2 mb-0 fw-bold" style={{ width: '60px' }}>
                     {headline.id}.0
@@ -383,27 +368,18 @@ function Home() {
                   )}
                 </Form.Group>
 
-                {/* Sub-points */}
                 {headline.subpoints.length > 0 && (
                   <div className="ms-5 mb-3">
                     {headline.subpoints.map((sub, subIdx) => (
-                      <Form.Group
-                        key={sub.id}
-                        className="d-flex align-items-center mb-2"
-                      >
-                        <Form.Label
-                          className="me-2 mb-0 text-muted"
-                          style={{ width: '60px' }}
-                        >
+                      <Form.Group key={sub.id} className="d-flex align-items-center mb-2">
+                        <Form.Label className="me-2 mb-0 text-muted" style={{ width: '60px' }}>
                           {headline.id}.{subIdx + 1}
                         </Form.Label>
                         <Form.Control
                           type="text"
                           placeholder="Enter sub-point title"
                           value={sub.value}
-                          onChange={(e) =>
-                            updateSubpoint(headline.id, sub.id, e.target.value)
-                          }
+                          onChange={(e) => updateSubpoint(headline.id, sub.id, e.target.value)}
                         />
                         <Button
                           variant="outline-danger"
@@ -418,7 +394,6 @@ function Home() {
                   </div>
                 )}
 
-                {/* Add Sub-point Button */}
                 <div className="ms-5">
                   <Button
                     variant="outline-secondary"
@@ -435,21 +410,55 @@ function Home() {
               + Add More Main Headline
             </Button>
 
-            {/* Photos */}
-            <Form.Group className="mt-4 mb-4">
+            {/* NEW: Exclude photos from AI checkbox */}
+            <Form.Group className="mb-4">
+              <Form.Check
+                type="checkbox"
+                id="excludePhotos"
+                label="Exclude uploaded photos from AI processing (user will insert manually later)"
+                checked={excludePhotosFromAI}
+                onChange={(e) => setExcludePhotosFromAI(e.target.checked)}
+              />
+              <Form.Text className="text-muted">
+                If checked and any headline contains words like "photo", "photograph", "pictures", etc., 
+                the report will show "To be added by user" in that section instead of embedding photos.
+              </Form.Text>
+            </Form.Group>
+
+            {/* Photos Upload */}
+            <Form.Group className="mt-4 mb-3">
               <Form.Label>Click to Upload Photos</Form.Label>
               <Form.Control
                 type="file"
                 multiple
                 accept="image/*"
                 onChange={handleMultipleFiles(setPhotos)}
+                disabled={excludePhotosFromAI} // Optional: disable upload if excluding
               />
-              {photos.length > 0 && (
-                <small className="text-success d-block mt-1">
-                  {photos.length} photo(s) selected
-                </small>
-              )}
             </Form.Group>
+
+            {photos.length > 0 && (
+              <div className="mb-4">
+                <strong>Selected Photos ({photos.length}):</strong>
+                <ul className="mt-2 list-unstyled">
+                  {photos.map((photo, index) => (
+                    <li key={index} className="d-flex align-items-center py-2 border-bottom">
+                      <span className="text-truncate me-auto" style={{ maxWidth: '300px' }}>
+                        {photo.name}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        className="ms-3"
+                        onClick={removePhoto(index)}
+                      >
+                        × Remove
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             <div className="text-center">
               <Button
@@ -476,7 +485,9 @@ function Home() {
           <Button variant="primary" onClick={downloadReport}>
             Download Report
           </Button>
-          <pre className="mt-3">{JSON.stringify(generatedReport, null, 2)}</pre>
+          <pre className="mt-3 bg-light p-3 rounded">
+            {JSON.stringify(generatedReport, null, 2)}
+          </pre>
         </Alert>
       )}
     </Container>
