@@ -27,10 +27,12 @@ const CLASSES_OF_BUSINESS = [
 function Home() {
   const [classOfBusiness, setClassOfBusiness] = useState('');
   const [reportType, setReportType] = useState(''); // 'preliminary' or 'final'
+
   const [headlines, setHeadlines] = useState(
     Array.from({ length: 8 }, (_, i) => ({
       id: i + 1,
       value: '',
+      subpoints: [], // array of { id: unique, value: string }
     }))
   );
 
@@ -46,10 +48,15 @@ function Home() {
   const [error, setError] = useState(null);
   const [generatedReport, setGeneratedReport] = useState(null);
 
+  // Headline functions
   const addHeadline = () => {
     setHeadlines([
       ...headlines,
-      { id: headlines.length + 1, value: '' },
+      {
+        id: headlines.length + 1,
+        value: '',
+        subpoints: [],
+      },
     ]);
   };
 
@@ -63,6 +70,48 @@ function Home() {
     );
   };
 
+  const addSubpoint = (mainId) => {
+    setHeadlines(
+      headlines.map((h) =>
+        h.id === mainId
+          ? {
+              ...h,
+              subpoints: [...h.subpoints, { id: Date.now(), value: '' }],
+            }
+          : h
+      )
+    );
+  };
+
+  const updateSubpoint = (mainId, subId, value) => {
+    setHeadlines(
+      headlines.map((h) =>
+        h.id === mainId
+          ? {
+              ...h,
+              subpoints: h.subpoints.map((s) =>
+                s.id === subId ? { ...s, value } : s
+              ),
+            }
+          : h
+      )
+    );
+  };
+
+  const removeSubpoint = (mainId, subId) => {
+    setHeadlines(
+      headlines.map((h) =>
+        h.id === mainId
+          ? {
+              ...h,
+              subpoints: h.subpoints.filter((s) => s.id !== subId),
+            }
+          : h
+      )
+    );
+  };
+
+  // File handling helpers
   const handleFileChange = (setter) => (e) => {
     const file = e.target.files[0];
     if (file) setter(file);
@@ -86,6 +135,14 @@ function Home() {
       setError('Please select Report Type');
       return;
     }
+    if (!fieldReport) {
+      setError('Please upload the Field Report');
+      return;
+    }
+    if (reportType === 'final' && !policyDocument) {
+      setError('Please upload the Policy Document for Final Report');
+      return;
+    }
 
     const formData = new FormData();
     formData.append('classOfBusiness', classOfBusiness);
@@ -94,40 +151,35 @@ function Home() {
       reportType === 'preliminary' ? 'interim' : 'final'
     );
 
-    // Append headlines as JSON string (server can parse if needed)
-    formData.append('headlines', JSON.stringify(headlines.map(h => h.value).filter(v => v.trim())));
+    // Send structured headlines (main + subpoints)
+    const structuredHeadlines = headlines
+      .filter((h) => h.value.trim() || h.subpoints.some((s) => s.value.trim()))
+      .map((h) => ({
+        main: h.value.trim(),
+        number: `${h.id}.0`,
+        subpoints: h.subpoints
+          .filter((s) => s.value.trim())
+          .map((s, idx) => ({
+            title: s.value.trim(),
+            number: `\( {h.id}. \){idx + 1}`,
+          })),
+      }));
 
-    if (reportType === 'preliminary') {
-      if (!fieldReport) {
-        setError('Please upload Field Report');
-        return;
-      }
-      formData.append('questionnaire', fieldReport); // reuse existing field names
-      additionalDocs.forEach((file, i) =>
-        formData.append('additionalDocs', file)
-      );
-    } else {
-      // Final report
-      if (!fieldReport) {
-        setError('Please upload Field Report');
-        return;
-      }
-      if (!policyDocument) {
-        setError('Please upload Policy Document');
-        return;
-      }
-      formData.append('questionnaire', fieldReport);
+    formData.append('headlines', JSON.stringify(structuredHeadlines));
+
+    // Files
+    formData.append('questionnaire', fieldReport); // reused field name for compatibility
+    if (reportType === 'final') {
       formData.append('analyzedFile', policyDocument);
       if (endorsement) formData.append('endorsement', endorsement);
-      additionalDocs.forEach((file) =>
-        formData.append('additionalDocs', file)
-      );
-      supportingDocs.forEach((file) =>
-        formData.append('supportingDocs', file)
-      );
     }
 
-    // Photos (common to both)
+    // Additional / Supporting docs
+    [...additionalDocs, ...supportingDocs].forEach((file) =>
+      formData.append('additionalDocs', file)
+    );
+
+    // Photos
     photos.forEach((photo) => formData.append('photos', photo));
 
     setLoading(true);
@@ -168,12 +220,11 @@ function Home() {
 
       <Card className="mb-4">
         <Card.Body>
-          <Form.Group className="mb-3">
+          <Form.Group className="mb-4">
             <Form.Label>Select Class of Business</Form.Label>
             <Form.Select
               value={classOfBusiness}
               onChange={(e) => setClassOfBusiness(e.target.value)}
-              required
             >
               <option value="">-- Choose Class --</option>
               {CLASSES_OF_BUSINESS.map((cls) => (
@@ -212,44 +263,40 @@ function Home() {
               {reportType === 'preliminary' ? 'Preliminary' : 'Final'} Report
             </h3>
 
-            {/* Common: Field Report */}
-            <Form.Group className="mb-3">
-              <Form.Label>
-                {reportType === 'preliminary'
-                  ? 'Click to Upload Field Report'
-                  : 'Upload Field Report'}
-              </Form.Label>
+            {/* Field Report - common to both */}
+            <Form.Group className="mb-4">
+              <Form.Label>Upload Field Report</Form.Label>
               <Form.Control
                 type="file"
                 accept=".docx,.pdf,.txt"
                 onChange={handleFileChange(setFieldReport)}
               />
-              {fieldReport && <small className="text-success">{fieldReport.name}</small>}
+              {fieldReport && <small className="text-success d-block mt-1">{fieldReport.name}</small>}
             </Form.Group>
 
             {reportType === 'final' && (
               <>
-                <Form.Group className="mb-3">
+                <Form.Group className="mb-4">
                   <Form.Label>Upload Policy Document</Form.Label>
                   <Form.Control
                     type="file"
                     accept=".docx,.pdf,.txt"
                     onChange={handleFileChange(setPolicyDocument)}
                   />
-                  {policyDocument && <small className="text-success">{policyDocument.name}</small>}
+                  {policyDocument && <small className="text-success d-block mt-1">{policyDocument.name}</small>}
                 </Form.Group>
 
-                <Form.Group className="mb-3">
+                <Form.Group className="mb-4">
                   <Form.Label>Upload Endorsement (Optional)</Form.Label>
                   <Form.Control
                     type="file"
                     accept=".docx,.pdf,.txt"
                     onChange={handleFileChange(setEndorsement)}
                   />
-                  {endorsement && <small className="text-success">{endorsement.name}</small>}
+                  {endorsement && <small className="text-success d-block mt-1">{endorsement.name}</small>}
                 </Form.Group>
 
-                <Form.Group className="mb-3">
+                <Form.Group className="mb-4">
                   <Form.Label>Upload Additional Documents</Form.Label>
                   <Form.Control
                     type="file"
@@ -272,7 +319,7 @@ function Home() {
             )}
 
             {reportType === 'preliminary' && (
-              <Form.Group className="mb-3">
+              <Form.Group className="mb-4">
                 <Form.Label>Click to Add More Documents</Form.Label>
                 <Form.Control
                   type="file"
@@ -283,17 +330,18 @@ function Home() {
               </Form.Group>
             )}
 
-            {/* Display uploaded additional/supporting files */}
+            {/* Uploaded additional/supporting files list */}
             {(additionalDocs.length > 0 || supportingDocs.length > 0) && (
-              <div className="mb-3">
-                <strong>Uploaded Additional Files:</strong>
-                <ul>
+              <div className="mb-4">
+                <strong>Uploaded Additional / Supporting Files:</strong>
+                <ul className="mt-2">
                   {[...additionalDocs, ...supportingDocs].map((file, idx) => (
-                    <li key={idx}>
-                      {file.name}{' '}
+                    <li key={idx} className="d-flex align-items-center">
+                      {file.name}
                       <Button
                         size="sm"
                         variant="danger"
+                        className="ms-2"
                         onClick={removeFileFromList(
                           idx < additionalDocs.length ? setAdditionalDocs : setSupportingDocs,
                           idx < additionalDocs.length ? idx : idx - additionalDocs.length
@@ -307,33 +355,84 @@ function Home() {
               </div>
             )}
 
-            {/* Report Arrangement - Headlines */}
+            {/* Report Arrangement - Headlines with Sub-points */}
             <h5 className="mb-3">Select Report Arrangement</h5>
+
             {headlines.map((headline) => (
-              <Form.Group key={headline.id} className="mb-2 d-flex align-items-center">
-                <Form.Label className="me-2 mb-0" style={{ width: '60px' }}>
-                  {headline.id}.0
-                </Form.Label>
-                <Form.Control
-                  type="text"
-                  placeholder="Enter headliner / Click to select"
-                  value={headline.value}
-                  onChange={(e) => updateHeadline(headline.id, e.target.value)}
-                />
-                {headlines.length > 8 && (
-                  <Button
-                    variant="outline-danger"
-                    size="sm"
-                    className="ms-2"
-                    onClick={() => removeHeadline(headline.id)}
-                  >
-                    –
-                  </Button>
+              <div key={headline.id} className="mb-4 border p-3 rounded bg-light">
+                {/* Main Headline */}
+                <Form.Group className="d-flex align-items-center mb-3">
+                  <Form.Label className="me-2 mb-0 fw-bold" style={{ width: '60px' }}>
+                    {headline.id}.0
+                  </Form.Label>
+                  <Form.Control
+                    type="text"
+                    placeholder="Enter main headliner / Click to select"
+                    value={headline.value}
+                    onChange={(e) => updateHeadline(headline.id, e.target.value)}
+                  />
+                  {headlines.length > 8 && (
+                    <Button
+                      variant="outline-danger"
+                      size="sm"
+                      className="ms-2"
+                      onClick={() => removeHeadline(headline.id)}
+                    >
+                      Remove
+                    </Button>
+                  )}
+                </Form.Group>
+
+                {/* Sub-points */}
+                {headline.subpoints.length > 0 && (
+                  <div className="ms-5 mb-3">
+                    {headline.subpoints.map((sub, subIdx) => (
+                      <Form.Group
+                        key={sub.id}
+                        className="d-flex align-items-center mb-2"
+                      >
+                        <Form.Label
+                          className="me-2 mb-0 text-muted"
+                          style={{ width: '60px' }}
+                        >
+                          {headline.id}.{subIdx + 1}
+                        </Form.Label>
+                        <Form.Control
+                          type="text"
+                          placeholder="Enter sub-point title"
+                          value={sub.value}
+                          onChange={(e) =>
+                            updateSubpoint(headline.id, sub.id, e.target.value)
+                          }
+                        />
+                        <Button
+                          variant="outline-danger"
+                          size="sm"
+                          className="ms-2"
+                          onClick={() => removeSubpoint(headline.id, sub.id)}
+                        >
+                          –
+                        </Button>
+                      </Form.Group>
+                    ))}
+                  </div>
                 )}
-              </Form.Group>
+
+                {/* Add Sub-point Button */}
+                <div className="ms-5">
+                  <Button
+                    variant="outline-secondary"
+                    size="sm"
+                    onClick={() => addSubpoint(headline.id)}
+                  >
+                    + Add Sub-point ({headline.id}.1, {headline.id}.2, etc.)
+                  </Button>
+                </div>
+              </div>
             ))}
-            <Button variant="link" onClick={addHeadline}>
-              + Add more
+
+            <Button variant="link" className="mb-4" onClick={addHeadline}>
+              + Add More Main Headline
             </Button>
 
             {/* Photos */}
@@ -346,7 +445,7 @@ function Home() {
                 onChange={handleMultipleFiles(setPhotos)}
               />
               {photos.length > 0 && (
-                <small className="text-success">
+                <small className="text-success d-block mt-1">
                   {photos.length} photo(s) selected
                 </small>
               )}
@@ -377,6 +476,7 @@ function Home() {
           <Button variant="primary" onClick={downloadReport}>
             Download Report
           </Button>
+          <pre className="mt-3">{JSON.stringify(generatedReport, null, 2)}</pre>
         </Alert>
       )}
     </Container>
