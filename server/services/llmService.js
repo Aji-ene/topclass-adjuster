@@ -3,7 +3,15 @@ const fs = require('fs').promises;
 const path = require('path');
 const Anthropic = require('@anthropic-ai/sdk');
 const OpenAI = require('openai');
-const { GoogleGenerativeAI } = require('@google/genai');
+
+// Dynamically import the ES module package
+let GoogleGenerativeAI;
+try {
+  // For ES modules in CommonJS context
+  GoogleGenerativeAI = require('@google/genai').GoogleGenerativeAI;
+} catch (error) {
+  console.warn('Failed to load @google/genai with require(), trying dynamic import');
+}
 
 // ---------------------------------------------------------------
 // Helper: read text from common insurance/claims file types
@@ -172,6 +180,17 @@ async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max
 
 // ---------------------------------------------------------------
 async function callGemini({ model, prompt, textFiles, imageFiles, temperature, max_tokens }) {
+  // Dynamically import the ES module if not already loaded
+  if (!GoogleGenerativeAI) {
+    try {
+      // Use dynamic import for ES modules in CommonJS
+      const module = await import('@google/genai');
+      GoogleGenerativeAI = module.GoogleGenerativeAI;
+    } catch (error) {
+      throw new Error(`Failed to load @google/genai module: ${error.message}`);
+    }
+  }
+
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   const generativeModel = genAI.getGenerativeModel({ model });
 
