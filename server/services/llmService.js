@@ -3,7 +3,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const Anthropic = require('@anthropic-ai/sdk');
 const OpenAI = require('openai');
-const { GoogleGenerativeAI } = require('@google/genai'); // official 2025+ unified SDK
+const { GoogleGenerativeAI } = require('@google/genai');
 
 // ---------------------------------------------------------------
 // Helper: read text from common insurance/claims file types
@@ -27,7 +27,6 @@ async function extractTextFromFile(filePath) {
       const result = await mammoth.extractRawText({ buffer });
       return result.value;
     }
-    // fallback
     return `[File content not extracted — ${ext} file: ${path.basename(filePath)}]`;
   } catch (err) {
     console.warn(`Could not extract text from ${filePath}:`, err.message);
@@ -36,26 +35,22 @@ async function extractTextFromFile(filePath) {
 }
 
 // ---------------------------------------------------------------
-// Helper: convert image to base64 (most APIs want this)
-// ---------------------------------------------------------------
 async function fileToBase64(filePath) {
   const buffer = await fs.readFile(filePath);
   return buffer.toString('base64');
 }
 
 // ---------------------------------------------------------------
-// Main dispatcher
-// ---------------------------------------------------------------
-async function callLLM({ agent, model, prompt, textFiles, imageFiles, temperature, max_tokens }) {
+async function callLLM({ agent, model, prompt, textFiles = [], imageFiles = [], temperature, max_tokens }) {
   switch (agent) {
     case 'claude':
-      return await callClaude({ model, prompt, textFiles, imageFiles, temperature, max_tokens });
+      return callClaude({ model, prompt, textFiles, imageFiles, temperature, max_tokens });
     case 'chatgpt':
-      return await callOpenAI({ model, prompt, textFiles, imageFiles, temperature, max_tokens });
+      return callOpenAI({ model, prompt, textFiles, imageFiles, temperature, max_tokens });
     case 'grok':
-      return await callGrok({ model, prompt, textFiles, imageFiles, temperature, max_tokens });
+      return callGrok({ model, prompt, textFiles, imageFiles, temperature, max_tokens });
     case 'gemini':
-      return await callGemini({ model, prompt, textFiles, imageFiles, temperature, max_tokens });
+      return callGemini({ model, prompt, textFiles, imageFiles, temperature, max_tokens });
     default:
       throw new Error(`Unsupported agent: ${agent}`);
   }
@@ -65,17 +60,16 @@ async function callLLM({ agent, model, prompt, textFiles, imageFiles, temperatur
 async function callClaude({ model, prompt, textFiles, imageFiles, temperature, max_tokens }) {
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  const content = [];
-  // System-like instruction
-  content.push({ type: 'text', text: prompt });
+  const content = [{ type: 'text', text: prompt }];
 
-  // Add document texts
   for (const filePath of textFiles) {
     const text = await extractTextFromFile(filePath);
-    content.push({ type: 'text', text: `\n\n--- Document: \( {path.basename(filePath)} ---\n \){text}` });
+    content.push({
+      type: 'text',
+      text: `\n\n--- Document: ${path.basename(filePath)} ---\n${text}`
+    });
   }
 
-  // Add images (Claude supports base64)
   for (const imgPath of imageFiles) {
     const base64 = await fileToBase64(imgPath);
     const mime = path.extname(imgPath) === '.png' ? 'image/png' : 'image/jpeg';
@@ -99,14 +93,18 @@ async function callClaude({ model, prompt, textFiles, imageFiles, temperature, m
 async function callOpenAI({ model, prompt, textFiles, imageFiles, temperature, max_tokens }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-  const messages = [{ role: 'system', content: 'You are an expert insurance claims adjuster.' }];
-  const userContent = [];
+  const messages = [
+    { role: 'system', content: 'You are an expert insurance claims adjuster.' }
+  ];
 
-  userContent.push({ type: 'text', text: prompt });
+  const userContent = [{ type: 'text', text: prompt }];
 
   for (const filePath of textFiles) {
     const text = await extractTextFromFile(filePath);
-    userContent.push({ type: 'text', text: `\n\n[Document: \( {path.basename(filePath)}]\n \){text}` });
+    userContent.push({
+      type: 'text',
+      text: `\n\n[Document: ${path.basename(filePath)}]\n${text}`
+    });
   }
 
   for (const imgPath of imageFiles) {
@@ -114,7 +112,7 @@ async function callOpenAI({ model, prompt, textFiles, imageFiles, temperature, m
     const mime = path.extname(imgPath) === '.png' ? 'image/png' : 'image/jpeg';
     userContent.push({
       type: 'image_url',
-      image_url: { url: `data:\( {mime};base64, \){base64}` }
+      image_url: { url: `data:${mime};base64,${base64}` }
     });
   }
 
@@ -132,19 +130,23 @@ async function callOpenAI({ model, prompt, textFiles, imageFiles, temperature, m
 
 // ---------------------------------------------------------------
 async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max_tokens }) {
-  // xAI API is OpenAI-compatible → just change baseURL
   const xai = new OpenAI({
     apiKey: process.env.XAI_API_KEY,
     baseURL: 'https://api.x.ai/v1',
   });
 
-  // Same structure as callOpenAI — Grok-4 family supports vision
-  const messages = [{ role: 'system', content: 'You are Grok — expert insurance analyst with real-time knowledge.' }];
+  const messages = [
+    { role: 'system', content: 'You are Grok — expert insurance analyst.' }
+  ];
+
   const userContent = [{ type: 'text', text: prompt }];
 
   for (const filePath of textFiles) {
     const text = await extractTextFromFile(filePath);
-    userContent.push({ type: 'text', text: `\n\n[File: \( {path.basename(filePath)}]\n \){text}` });
+    userContent.push({
+      type: 'text',
+      text: `\n\n[File: ${path.basename(filePath)}]\n${text}`
+    });
   }
 
   for (const imgPath of imageFiles) {
@@ -152,7 +154,7 @@ async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max
     const mime = path.extname(imgPath) === '.png' ? 'image/png' : 'image/jpeg';
     userContent.push({
       type: 'image_url',
-      image_url: { url: `data:\( {mime};base64, \){base64}` }
+      image_url: { url: `data:${mime};base64,${base64}` }
     });
   }
 
@@ -177,109 +179,97 @@ async function callGemini({ model, prompt, textFiles, imageFiles, temperature, m
 
   for (const filePath of textFiles) {
     const text = await extractTextFromFile(filePath);
-    parts.push({ text: `\n\n--- \( {path.basename(filePath)} ---\n \){text}` });
+    parts.push({
+      text: `\n\n--- ${path.basename(filePath)} ---\n${text}`
+    });
   }
 
   for (const imgPath of imageFiles) {
     const base64 = await fileToBase64(imgPath);
     const mime = path.extname(imgPath) === '.png' ? 'image/png' : 'image/jpeg';
     parts.push({
-      inlineData: {
-        mimeType: mime,
-        data: base64
-      }
+      inlineData: { mimeType: mime, data: base64 }
     });
   }
 
   const result = await generativeModel.generateContent({
     contents: [{ role: 'user', parts }],
-    generationConfig: {
-      temperature,
-      maxOutputTokens: max_tokens
-    }
+    generationConfig: { temperature, maxOutputTokens: max_tokens }
   });
 
   return { content: result.response.text() };
 }
 
 // ---------------------------------------------------------------
-// Prompt builders — customize heavily according to your needs
+// Prompt builders
 // ---------------------------------------------------------------
 function buildScrutinyPrompt(metadata) {
+  const focus =
+    metadata.structuredHeadlines?.map(h =>
+      `- ${h.main}\n${h.subpoints.map(s => `  • ${s.title}`).join('\n')}`
+    ).join('\n') || 'No specific focus areas provided — use standard scrutiny checklist';
+
   return `
 You are a senior insurance claims adjuster with 15+ years experience.
 Class of Business: ${metadata.classOfBusiness}
 
-Perform detailed scrutiny / gap analysis of the attached Field Report.
-Look for:
-- inconsistencies in facts / timeline
-- missing documents / photos / evidence
-- policy coverage issues
-- fraud red flags
-- reserve adequacy concerns
-- probing questions the insured / broker should answer
-
 Claim: ${metadata.claimNumber} — ${metadata.insuredName}
-Date of loss: ${metadata.dateOfLoss}
+Date of Loss: ${metadata.dateOfLoss}
 Location: ${metadata.locationOfLoss}
 
-Brief loss description: ${metadata.lossDescription}
+Loss description:
+${metadata.lossDescription}
 
 Focus areas:
-${metadata.structuredHeadlines.map(h => `- ${h.main || ''} ${h.subpoints.map(s => `  • ${s.title}`).join('\n')}`).join('\n') || 'No specific focus areas provided — use standard scrutiny checklist'}
+${focus}
 
-Structure your output as markdown with clear headings.
-Be critical, professional, and evidence-based.
-  `;
+Provide a professional, critical markdown report.
+`;
 }
 
 function buildPreliminaryPrompt(metadata) {
+  const structure =
+    metadata.structuredHeadlines?.map(h =>
+      `${h.number}. ${h.main}\n${h.subpoints.map(s => `   ${s.number} ${s.title}`).join('\n')}`
+    ).join('\n') || 'Use standard preliminary report format';
+
   return `
-You are preparing a Preliminary / Interim claims report.
+Prepare a Preliminary / Interim Claims Report.
+
+Claim: ${metadata.claimNumber}
+Insured: ${metadata.insuredName}
 Class: ${metadata.classOfBusiness}
-
-Use the attached documents (mainly Field Report + any additional files).
-Claim: ${metadata.claimNumber} — Insured: ${metadata.insuredName}
-DOL: ${metadata.dateOfLoss} @ ${metadata.locationOfLoss}
-
-Summarise:
-- Circumstances of loss
-- Initial reserve recommendation
-- Coverage position
-- Next steps / outstanding requirements
+Date & Location of Loss: ${metadata.dateOfLoss} @ ${metadata.locationOfLoss}
 
 Follow this structure:
-\( {metadata.structuredHeadlines.map(h => ` \){h.number} \( {h.main}\n \){h.subpoints.map(s => `   ${s.number} ${s.title}`).join('\n')}`).join('\n') || 'Use standard preliminary report format'}
+${structure}
 
-Output in professional markdown format.
-  `;
+Output professional markdown.
+`;
 }
 
 function buildFinalPrompt(metadata) {
+  const structure =
+    metadata.structuredHeadlines?.map(h =>
+      `${h.number}. ${h.main}\n${h.subpoints.map(s => `   ${s.number} ${s.title}`).join('\n')}`
+    ).join('\n') || 'Standard final report structure';
+
   return `
-Prepare a comprehensive Final Adjustment Report.
-Class of Business: ${metadata.classOfBusiness}
+Prepare a Final Adjustment Report.
 
-Incorporate:
-- Field report
-- Policy wording (attached)
-- Endorsements (if any)
-- Additional / supporting documents
-
-Claim details:
-${metadata.claimNumber} — ${metadata.insuredName}
+Claim: ${metadata.claimNumber}
+Insured: ${metadata.insuredName}
+Class: ${metadata.classOfBusiness}
 Loss: ${metadata.dateOfLoss} — ${metadata.locationOfLoss}
-Description: ${metadata.lossDescription}
 
-Coverage analysis, quantum calculation, recommended settlement, deductibles, subrogation potential, etc.
+Strictly follow this structure:
+${structure}
 
-Strictly follow this report arrangement:
-\( {metadata.structuredHeadlines.map(h => ` \){h.number} \( {h.main}\n \){h.subpoints.map(s => `   ${s.number} ${s.title}`).join('\n')}`).join('\n') || 'Standard final report structure'}
-
-Output clean, professional markdown suitable for insured / reinsurer / file.
-  `;
+Produce clean, professional markdown suitable for file and reinsurers.
+`;
 }
 
+// ---------------------------------------------------------------
 module.exports = {
   callLLM,
   buildScrutinyPrompt,
