@@ -4,14 +4,8 @@ const path = require('path');
 const Anthropic = require('@anthropic-ai/sdk');
 const OpenAI = require('openai');
 
-// Dynamically import the ES module package
+// We'll handle Gemini dynamically since it's ESM
 let GoogleGenerativeAI;
-try {
-  // For ES modules in CommonJS context
-  GoogleGenerativeAI = require('@google/genai').GoogleGenerativeAI;
-} catch (error) {
-  console.warn('Failed to load @google/genai with require(), trying dynamic import');
-}
 
 // ---------------------------------------------------------------
 // Helper: read text from common insurance/claims file types
@@ -180,43 +174,43 @@ async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max
 
 // ---------------------------------------------------------------
 async function callGemini({ model, prompt, textFiles, imageFiles, temperature, max_tokens }) {
-  // Dynamically import the ES module if not already loaded
-  if (!GoogleGenerativeAI) {
-    try {
-      // Use dynamic import for ES modules in CommonJS
+  try {
+    // Dynamically import the ES module
+    if (!GoogleGenerativeAI) {
       const module = await import('@google/genai');
       GoogleGenerativeAI = module.GoogleGenerativeAI;
-    } catch (error) {
-      throw new Error(`Failed to load @google/genai module: ${error.message}`);
     }
-  }
 
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const generativeModel = genAI.getGenerativeModel({ model });
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const generativeModel = genAI.getGenerativeModel({ model });
 
-  const parts = [{ text: prompt }];
+    const parts = [{ text: prompt }];
 
-  for (const filePath of textFiles) {
-    const text = await extractTextFromFile(filePath);
-    parts.push({
-      text: `\n\n--- ${path.basename(filePath)} ---\n${text}`
+    for (const filePath of textFiles) {
+      const text = await extractTextFromFile(filePath);
+      parts.push({
+        text: `\n\n--- ${path.basename(filePath)} ---\n${text}`
+      });
+    }
+
+    for (const imgPath of imageFiles) {
+      const base64 = await fileToBase64(imgPath);
+      const mime = path.extname(imgPath) === '.png' ? 'image/png' : 'image/jpeg';
+      parts.push({
+        inlineData: { mimeType: mime, data: base64 }
+      });
+    }
+
+    const result = await generativeModel.generateContent({
+      contents: [{ role: 'user', parts }],
+      generationConfig: { temperature, maxOutputTokens: max_tokens }
     });
+
+    return { content: result.response.text() };
+  } catch (error) {
+    console.error('Error calling Gemini:', error);
+    throw new Error(`Gemini API error: ${error.message}`);
   }
-
-  for (const imgPath of imageFiles) {
-    const base64 = await fileToBase64(imgPath);
-    const mime = path.extname(imgPath) === '.png' ? 'image/png' : 'image/jpeg';
-    parts.push({
-      inlineData: { mimeType: mime, data: base64 }
-    });
-  }
-
-  const result = await generativeModel.generateContent({
-    contents: [{ role: 'user', parts }],
-    generationConfig: { temperature, maxOutputTokens: max_tokens }
-  });
-
-  return { content: result.response.text() };
 }
 
 // ---------------------------------------------------------------
@@ -289,9 +283,8 @@ Produce clean, professional markdown suitable for file and reinsurers.
 }
 
 // ---------------------------------------------------------------
-module.exports = {
-  callLLM,
-  buildScrutinyPrompt,
-  buildPreliminaryPrompt,
-  buildFinalPrompt,
-};
+// Export as functions, not as a default object
+exports.callLLM = callLLM;
+exports.buildScrutinyPrompt = buildScrutinyPrompt;
+exports.buildPreliminaryPrompt = buildPreliminaryPrompt;
+exports.buildFinalPrompt = buildFinalPrompt;
