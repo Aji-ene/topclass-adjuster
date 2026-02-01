@@ -3,6 +3,7 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs').promises;
+const fsSynch = require('fs');
 
 const router = express.Router();
 
@@ -17,9 +18,9 @@ const {
 // ────────────────────────────────────────────────
 // Multer storage configuration
 const storage = multer.diskStorage({
-  destination: async (req, file, cb) => {
+  destination: (req, file, cb) => {
     const dir = path.join(__dirname, '..', 'uploads', 'temp');
-    await fs.mkdir(dir, { recursive: true });
+    fsSynch.mkdirSync(dir, { recursive: true });
     cb(null, dir);
   },
   filename: (req, file, cb) => {
@@ -199,7 +200,7 @@ router.post('/process-files', cpUpload, async (req, res) => {
 
     // ─── Call LLM service ──────────────────────────────────────────
     console.log(`Processing ${reportType} report using ${aiAgent} (${model})`);
-    
+
     const llmResult = await callLLM({
       agent: aiAgent,
       model,
@@ -234,41 +235,59 @@ router.post('/process-files', cpUpload, async (req, res) => {
 });
 
 
-
-// -----------------------------
+// ────────────────────────────────────────────────
 // Export report as DOCX
-// -----------------------------
+// ────────────────────────────────────────────────
 router.post('/export/docx', async (req, res) => {
   try {
     const { reportText, metadata } = req.body;
 
     if (!reportText) {
-      return res.status(400).json({ success: false, message: 'reportText is required' });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'reportText is required' 
+      });
     }
 
     const { generateReport } = require('../services/reportGenerator');
 
-    const safeName = `report-\( {metadata?.claimNumber || 'gen'}- \){Date.now()}.docx`;
-    const outputPath = path.join(__dirname, '../uploads/reports', safeName);
+    // Ensure reports directory exists
+    const outputDir = path.join(__dirname, '..', 'uploads', 'reports');
+    await fs.mkdir(outputDir, { recursive: true });
 
-    await generateReport(reportText, {
+    // Create safe filename
+    const safeName = `report-${metadata?.claimNumber || 'gen'}-${Date.now()}.docx`;
+    const outputPath = path.join(outputDir, safeName);
+
+    // Generate the report
+    await generateReport(reportText, outputPath, {
       reportType: metadata?.reportType || 'final',
-      aiAgent:   metadata?.aiAgent   || 'unknown',
+      aiAgent: metadata?.aiAgent || 'unknown',
       claimNumber: metadata?.claimNumber || 'UNKNOWN',
       classOfBusiness: metadata?.classOfBusiness || '',
       generatedAt: metadata?.generatedAt || new Date().toISOString(),
     });
 
+    // Send file to client
     res.download(outputPath, safeName, (err) => {
-      if (err) console.error(err);
-      // Optional: clean up after short delay
-      setTimeout(() => fs.unlink(outputPath).catch(() => {}), 30000);
+      if (err) {
+        console.error('Error downloading file:', err);
+      }
+      // Clean up file after 30 seconds
+      setTimeout(() => {
+        fs.unlink(outputPath).catch(error => {
+          console.error('Error deleting temporary file:', error);
+        });
+      }, 30000);
     });
+
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, message: err.message });
+    console.error('Error exporting DOCX:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: err.message || 'Export failed' 
+    });
   }
 });
 
 
-module.exports = router;
