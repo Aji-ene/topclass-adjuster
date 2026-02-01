@@ -290,4 +290,6 @@ router.post('/export/docx', async (req, res) => {
   }
 });
 
+module.exports = router;
+
 
