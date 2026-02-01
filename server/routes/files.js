@@ -233,4 +233,42 @@ router.post('/process-files', cpUpload, async (req, res) => {
   }
 });
 
+
+
+// -----------------------------
+// Export report as DOCX
+// -----------------------------
+router.post('/export/docx', async (req, res) => {
+  try {
+    const { reportText, metadata } = req.body;
+
+    if (!reportText) {
+      return res.status(400).json({ success: false, message: 'reportText is required' });
+    }
+
+    const { generateReport } = require('../services/reportGenerator');
+
+    const safeName = `report-\( {metadata?.claimNumber || 'gen'}- \){Date.now()}.docx`;
+    const outputPath = path.join(__dirname, '../uploads/reports', safeName);
+
+    await generateReport(reportText, {
+      reportType: metadata?.reportType || 'final',
+      aiAgent:   metadata?.aiAgent   || 'unknown',
+      claimNumber: metadata?.claimNumber || 'UNKNOWN',
+      classOfBusiness: metadata?.classOfBusiness || '',
+      generatedAt: metadata?.generatedAt || new Date().toISOString(),
+    });
+
+    res.download(outputPath, safeName, (err) => {
+      if (err) console.error(err);
+      // Optional: clean up after short delay
+      setTimeout(() => fs.unlink(outputPath).catch(() => {}), 30000);
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+
 module.exports = router;
