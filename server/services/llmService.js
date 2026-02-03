@@ -177,7 +177,7 @@ async function callGemini({ model, prompt, textFiles, imageFiles, temperature, m
   try {
     // Dynamically import the ES module
     if (!GoogleGenerativeAI) {
-      const module = await import('@google/genai');
+      const module = await import('@google/generative-ai');
       GoogleGenerativeAI = module.GoogleGenerativeAI;
     }
 
