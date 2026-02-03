@@ -1,31 +1,24 @@
 // routes/files.js
-const express = require('express');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs').promises;
-const fsSynch = require('fs');
+import express from 'express';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs/promises';
+import fsSynch from 'fs';
+import { callLLM, buildScrutinyPrompt, buildPreliminaryPrompt, buildFinalPrompt } from '../services/llmService.js';
+import { generateReport } from '../services/reportGenerator.js';
 
 const router = express.Router();
-
-// Import your LLM service
-// server.js or wherever you're importing llmService.js
-import { 
-  callLLM, 
-  buildScrutinyPrompt, 
-  buildPreliminaryPrompt, 
-  buildFinalPrompt 
-} from './services/llmService.js';
 
 // ────────────────────────────────────────────────
 // Multer storage configuration
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const dir = path.join(__dirname, '..', 'uploads', 'temp');
+    const dir = path.join(process.cwd(), 'uploads', 'temp');
     fsSynch.mkdirSync(dir, { recursive: true });
     cb(null, dir);
   },
   filename: (req, file, cb) => {
-    const safeName = `${Date.now()}-${Math.trunc(Math.random()*1e6)}-${file.originalname.replace(/[^a-z0-9.]/gi,'_')}`;
+    const safeName = `${Date.now()}-${Math.trunc(Math.random() * 1e6)}-${file.originalname.replace(/[^a-z0-9.]/gi, '_')}`;
     cb(null, safeName);
   }
 });
@@ -40,11 +33,11 @@ const upload = multer({
 });
 
 const cpUpload = upload.fields([
-  { name: 'questionnaire',   maxCount: 1  },
-  { name: 'analyzedFile',    maxCount: 1  },
-  { name: 'endorsement',     maxCount: 1  },
-  { name: 'additionalDocs',  maxCount: 12 },
-  { name: 'photos',          maxCount: 30 },
+  { name: 'questionnaire', maxCount: 1 },
+  { name: 'analyzedFile', maxCount: 1 },
+  { name: 'endorsement', maxCount: 1 },
+  { name: 'additionalDocs', maxCount: 12 },
+  { name: 'photos', maxCount: 30 },
 ]);
 
 // ────────────────────────────────────────────────
@@ -90,52 +83,52 @@ const MAX_TOKENS_CONFIG = {
 router.post('/process-files', cpUpload, async (req, res) => {
   try {
     const {
-      reportType,             // scrutiny | interim | final
+      reportType, // scrutiny | interim | final
       classOfBusiness,
-      aiAgent,                // claude | chatgpt | grok | gemini
-      claimNumber    = '',
-      policyNumber   = '',
-      insuredName    = '',
-      dateOfLoss     = '',
+      aiAgent, // claude | chatgpt | grok | gemini
+      claimNumber = '',
+      policyNumber = '',
+      insuredName = '',
+      dateOfLoss = '',
       locationOfLoss = '',
       lossDescription = '',
-      headlines,              // JSON string
+      headlines, // JSON string
       excludePhotosFromAI = 'false',
     } = req.body;
 
     // ─── Validation ────────────────────────────────────────────────
     if (!reportType || !classOfBusiness || !aiAgent) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Missing required fields: reportType, classOfBusiness, or aiAgent' 
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: reportType, classOfBusiness, or aiAgent'
       });
     }
 
     if (!['scrutiny', 'interim', 'final'].includes(reportType)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Invalid reportType. Must be: scrutiny, interim, or final' 
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid reportType. Must be: scrutiny, interim, or final'
       });
     }
 
     if (!['claude', 'chatgpt', 'grok', 'gemini'].includes(aiAgent)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Invalid aiAgent. Must be: claude, chatgpt, grok, or gemini' 
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid aiAgent. Must be: claude, chatgpt, grok, or gemini'
       });
     }
 
     if (!req.files?.questionnaire?.[0]) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Field report (questionnaire) is required' 
+      return res.status(400).json({
+        success: false,
+        message: 'Field report (questionnaire) is required'
       });
     }
 
     if (reportType === 'final' && !req.files?.analyzedFile?.[0]) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Policy document is required for final report' 
+      return res.status(400).json({
+        success: false,
+        message: 'Policy document is required for final report'
       });
     }
 
@@ -185,18 +178,18 @@ router.post('/process-files', cpUpload, async (req, res) => {
     // ─── Collect files to send to LLM ──────────────────────────────
     const filesToSend = [
       req.files.questionnaire[0].path,
-      ...(reportType === 'final' && req.files.analyzedFile?.[0] 
-          ? [req.files.analyzedFile[0].path] 
-          : []),
-      ...(req.files.endorsement?.[0] 
-          ? [req.files.endorsement[0].path] 
-          : []),
+      ...(reportType === 'final' && req.files.analyzedFile?.[0]
+        ? [req.files.analyzedFile[0].path]
+        : []),
+      ...(req.files.endorsement?.[0]
+        ? [req.files.endorsement[0].path]
+        : []),
       ...(req.files.additionalDocs || []).map(f => f.path),
     ].filter(Boolean);
 
     // ─── Collect photos if not excluded ────────────────────────────
-    const images = metadata.excludePhotos 
-      ? [] 
+    const images = metadata.excludePhotos
+      ? []
       : (req.files.photos || []).map(f => f.path);
 
     // ─── Call LLM service ──────────────────────────────────────────
@@ -235,7 +228,6 @@ router.post('/process-files', cpUpload, async (req, res) => {
   }
 });
 
-
 // ────────────────────────────────────────────────
 // Export report as DOCX
 // ────────────────────────────────────────────────
@@ -244,16 +236,14 @@ router.post('/export/docx', async (req, res) => {
     const { reportText, metadata } = req.body;
 
     if (!reportText) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'reportText is required' 
+      return res.status(400).json({
+        success: false,
+        message: 'reportText is required'
       });
     }
 
-    const { generateReport } = require('../services/reportGenerator');
-
     // Ensure reports directory exists
-    const outputDir = path.join(__dirname, '..', 'uploads', 'reports');
+    const outputDir = path.join(process.cwd(), 'uploads', 'reports');
     await fs.mkdir(outputDir, { recursive: true });
 
     // Create safe filename
@@ -284,13 +274,11 @@ router.post('/export/docx', async (req, res) => {
 
   } catch (err) {
     console.error('Error exporting DOCX:', err);
-    res.status(500).json({ 
-      success: false, 
-      message: err.message || 'Export failed' 
+    res.status(500).json({
+      success: false,
+      message: err.message || 'Export failed'
     });
   }
 });
 
-module.exports = router;
-
-
+export default router;
