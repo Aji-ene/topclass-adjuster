@@ -186,8 +186,8 @@ async function callGemini({ model, prompt, textFiles, imageFiles, temperature, m
 
     // Map common model names to correct Gemini model identifiers
     const modelMap = {
-      'gemini-1.5-pro': 'gemini-1.5-pro-latest',
-      'gemini-1.5-flash': 'gemini-1.5-flash-latest',
+      'gemini-1.5-pro': 'gemini-1.5-pro',
+      'gemini-1.5-flash': 'gemini-1.5-flash',
       'gemini-pro': 'gemini-pro'
     };
 
