@@ -8,12 +8,13 @@ const fsSynch = require('fs');
 const router = express.Router();
 
 // Import your LLM service
-const { 
-  callLLM,
-  buildScrutinyPrompt,
-  buildPreliminaryPrompt,
+// server.js or wherever you're importing llmService.js
+import { 
+  callLLM, 
+  buildScrutinyPrompt, 
+  buildPreliminaryPrompt, 
   buildFinalPrompt 
-} = require('../services/llmService');
+} from './services/llmService.js';
 
 // ────────────────────────────────────────────────
 // Multer storage configuration
