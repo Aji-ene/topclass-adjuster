@@ -170,53 +170,37 @@ async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max
 }
 
 // ---------------------------------------------------------------
+// Note: Use 'GoogleGenAI' from '@google/genai'
 async function callGemini({ model, prompt, textFiles, imageFiles, temperature, max_tokens }) {
   try {
-    // 1. New SDK Import (2026 Unified Client)
-    const { CreateClient } = await import('@google/genai');
+    const { GoogleGenAI } = await import('@google/genai');
     
-    // The new client handles versioning (v1/v1beta) automatically
-    const client = CreateClient({ 
-      apiKey: process.env.GEMINI_API_KEY 
-    });
+    // Initialize the client
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-    // 2. Modern Model Mapping
-    // Maps your existing input strings to the 2026 production models
+    // 2026 Model Mapping
     const modelMap = {
-      'gemini-1.5-pro': 'gemini-3-pro',
-      'gemini-1.5-flash': 'gemini-3-flash',
-      'gemini-3-pro': 'gemini-3-pro',
-      'gemini-3-flash': 'gemini-3-flash'
+      'gemini-1.5-pro': 'gemini-3-pro', 
+      'gemini-1.5-flash': 'gemini-3-flash'
     };
-
     const targetModel = modelMap[model] || 'gemini-3-flash';
 
-    // 3. Prepare Content Parts
     const parts = [{ text: prompt }];
 
-    // Attach Text Data
+    // Handle files (Text and Images)
     for (const filePath of textFiles) {
       const text = await extractTextFromFile(filePath);
-      parts.push({
-        text: `\n\n--- Document: ${path.basename(filePath)} ---\n${text}`
-      });
+      parts.push({ text: `\n\n[File: ${path.basename(filePath)}]\n${text}` });
     }
 
-    // Attach Image Data
     for (const imgPath of imageFiles) {
       const base64 = await fileToBase64(imgPath);
       const mime = path.extname(imgPath) === '.png' ? 'image/png' : 'image/jpeg';
-      parts.push({
-        inlineData: { 
-          mimeType: mime, 
-          data: base64 
-        }
-      });
+      parts.push({ inlineData: { mimeType: mime, data: base64 } });
     }
 
-    // 4. Execute Generation
-    // Note: The new SDK uses 'config' rather than 'generationConfig'
-    const result = await client.models.generateContent({
+    // The new 2026 API call structure
+    const result = await ai.models.generateContent({
       model: targetModel,
       contents: [{ role: 'user', parts }],
       config: { 
@@ -228,16 +212,10 @@ async function callGemini({ model, prompt, textFiles, imageFiles, temperature, m
     return { content: result.response.text() };
 
   } catch (error) {
-    console.error('Gemini Service Error:', error);
-    
-    // Error handling for common 2026 API issues
-    if (error.message.includes('quota')) {
-      throw new Error('Gemini API quota exceeded. Please check your billing tier.');
-    }
-    
-    throw new Error(`Gemini API error: ${error.message}`);
+    throw new Error(`Gemini SDK Error: ${error.message}`);
   }
 }
+
 
 
 
