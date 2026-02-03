@@ -23,6 +23,7 @@ const CLASSES_OF_BUSINESS = [
   'Fraud',
   'Business Interruption',
   'Fidelity Guarantee',
+  'Property',
 ];
 
 const AI_AGENTS = [
