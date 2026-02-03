@@ -1,11 +1,11 @@
 // routes/files.js
-import express from 'express';
-import multer from 'multer';
-import path from 'path';
-import fs from 'fs/promises';
-import fsSynch from 'fs';
-import { callLLM, buildScrutinyPrompt, buildPreliminaryPrompt, buildFinalPrompt } from '../services/llmService.js';
-import { generateReport } from '../services/reportGenerator.js';
+const express = require('express');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs/promises');
+const fsSynch = require('fs');
+const llmService = require('../services/llmService.js');
+const reportGenerator = require('../services/reportGenerator.js');
 
 const router = express.Router();
 
@@ -151,13 +151,13 @@ router.post('/process-files', cpUpload, async (req, res) => {
     let promptFn;
     switch (reportType) {
       case 'scrutiny':
-        promptFn = buildScrutinyPrompt;
+        promptFn = llmService.buildScrutinyPrompt;
         break;
       case 'interim':
-        promptFn = buildPreliminaryPrompt;
+        promptFn = llmService.buildPreliminaryPrompt;
         break;
       case 'final':
-        promptFn = buildFinalPrompt;
+        promptFn = llmService.buildFinalPrompt;
         break;
       default:
         throw new Error('Invalid report type');
@@ -195,7 +195,7 @@ router.post('/process-files', cpUpload, async (req, res) => {
     // ─── Call LLM service ──────────────────────────────────────────
     console.log(`Processing ${reportType} report using ${aiAgent} (${model})`);
 
-    const llmResult = await callLLM({
+    const llmResult = await llmService.callLLM({
       agent: aiAgent,
       model,
       prompt,
@@ -251,7 +251,7 @@ router.post('/export/docx', async (req, res) => {
     const outputPath = path.join(outputDir, safeName);
 
     // Generate the report
-    await generateReport(reportText, outputPath, {
+    await reportGenerator.generateReport(reportText, outputPath, {
       reportType: metadata?.reportType || 'final',
       aiAgent: metadata?.aiAgent || 'unknown',
       claimNumber: metadata?.claimNumber || 'UNKNOWN',
@@ -281,4 +281,4 @@ router.post('/export/docx', async (req, res) => {
   }
 });
 
-export default router;
+module.exports = router;
