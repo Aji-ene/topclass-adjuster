@@ -1,8 +1,8 @@
 // services/llmService.js
-const fs = require('fs').promises;
-const path = require('path');
-const Anthropic = require('@anthropic-ai/sdk');
-const OpenAI = require('openai');
+import fs from 'fs/promises';
+import path from 'path';
+import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 
 // We'll handle Gemini dynamically since it's ESM
 let GoogleGenerativeAI;
@@ -294,7 +294,7 @@ Produce clean, professional markdown suitable for file and reinsurers.
 
 // ---------------------------------------------------------------
 // Export as functions, not as a default object
-exports.callLLM = callLLM;
+export { callLLM, buildScrutinyPrompt, buildPreliminaryPrompt, buildFinalPrompt };
 exports.buildScrutinyPrompt = buildScrutinyPrompt;
 exports.buildPreliminaryPrompt = buildPreliminaryPrompt;
 exports.buildFinalPrompt = buildFinalPrompt;
