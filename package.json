@@ -4,15 +4,15 @@
   "private": true,
   "description": "AI-powered insurance claims processing platform for Topclass Adjusters",
   "main": "server/server.js",
-  "type": "module",
+  "type": "commonjs",
   "scripts": {
     "start": "node server/server.js",
     "dev": "concurrently \"npm run server:dev\" \"npm run client:dev\"",
     "server:dev": "nodemon server/server.js",
-    "client:dev": "cd client && vite",
-    "build": "cd client && vite build",
+    "client:dev": "cd client && npm run dev",
+    "build": "cd client && npm run build",
     "build:client": "npm run build",
-    "preview": "cd client && vite preview",
+    "preview": "cd client && npm run preview",
     "lint": "eslint . --ext .js,.jsx",
     "format": "prettier --write .",
     "clean:uploads": "rm -rf server/uploads/*",
@@ -31,17 +31,10 @@
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
     "openai": "^4.61.0",
-    "pdf-parse": "^1.1.1",
-    "react": "^18.3.1",
-    "react-bootstrap": "^2.10.4",
-    "react-dom": "^18.3.1",
-    "react-router-dom": "^6.26.2"
+    "pdf-parse": "^1.1.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",
-    "@types/react": "^18.3.5",
-    "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.1",
     "concurrently": "^8.2.2",
     "eslint": "^9.9.1",
     "eslint-plugin-react": "^7.35.0",
@@ -49,17 +42,11 @@
     "eslint-plugin-react-refresh": "^0.4.11",
     "globals": "^15.9.0",
     "nodemon": "^3.1.4",
-    "prettier": "^3.3.3",
-    "vite": "^5.4.8"
+    "prettier": "^3.3.3"
   },
   "engines": {
     "node": ">=18.0.0"
   },
-  "browserslist": [
-    ">0.2%",
-    "not dead",
-    "not op_mini all"
-  ],
   "keywords": [
     "insurance",
     "claims",
