@@ -173,6 +173,7 @@ async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max
 }
 
 // ---------------------------------------------------------------
+
 async function callGemini({ model, prompt, textFiles, imageFiles, temperature, max_tokens }) {
   try {
     // Dynamically import the ES module
@@ -182,7 +183,16 @@ async function callGemini({ model, prompt, textFiles, imageFiles, temperature, m
     }
 
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const generativeModel = genAI.getGenerativeModel({ model });
+    
+    // Fix: Map common model names to correct Gemini model identifiers
+    const modelMap = {
+      'gemini-1.5-pro': 'gemini-1.5-pro-latest',
+      'gemini-1.5-flash': 'gemini-1.5-flash-latest',
+      'gemini-pro': 'gemini-pro'
+    };
+    
+    const geminiModel = modelMap[model] || model;
+    const generativeModel = genAI.getGenerativeModel({ model: geminiModel });
 
     const parts = [{ text: prompt }];
 
