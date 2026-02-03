@@ -170,27 +170,35 @@ async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max
 }
 
 // ---------------------------------------------------------------
-// Note: Use 'GoogleGenAI' from '@google/genai'
+
 async function callGemini({ model, prompt, textFiles, imageFiles, temperature, max_tokens }) {
   try {
+    // 1. Initialize the new 2026 SDK
     const { GoogleGenAI } = await import('@google/genai');
     
-    // Initialize the client
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    // Explicitly set apiVersion to 'v1beta' to access Gemini 3 Preview models
+    const ai = new GoogleGenAI({ 
+      apiKey: process.env.GEMINI_API_KEY,
+      apiVersion: 'v1beta' 
+    });
 
-    // 2026 Model Mapping
+    // 2. Updated 2026 Model Mapping
+    // Note: 'gemini-1.5-pro' is now retired. We map it to 2.5 (Stable) or 3 (Preview).
     const modelMap = {
-      'gemini-1.5-pro': 'gemini-3-pro', 
-      'gemini-1.5-flash': 'gemini-3-flash'
+      'gemini-1.5-pro': 'gemini-2.5-pro',         // Stable fallback
+      'gemini-3-pro': 'gemini-3-pro-preview',     // Flagship Preview
+      'gemini-3-flash': 'gemini-3-flash-preview', // Fast Preview
+      'gemini-2.5-pro': 'gemini-2.5-pro',         // Current industry standard
     };
-    const targetModel = modelMap[model] || 'gemini-3-flash';
 
+    const targetModel = modelMap[model] || 'gemini-3-flash-preview';
+
+    // 3. Prepare parts
     const parts = [{ text: prompt }];
 
-    // Handle files (Text and Images)
     for (const filePath of textFiles) {
       const text = await extractTextFromFile(filePath);
-      parts.push({ text: `\n\n[File: ${path.basename(filePath)}]\n${text}` });
+      parts.push({ text: `\n\n[Document: ${path.basename(filePath)}]\n${text}` });
     }
 
     for (const imgPath of imageFiles) {
@@ -199,23 +207,25 @@ async function callGemini({ model, prompt, textFiles, imageFiles, temperature, m
       parts.push({ inlineData: { mimeType: mime, data: base64 } });
     }
 
-    // The new 2026 API call structure
+    // 4. Generate Content using the correct 2026 syntax
     const result = await ai.models.generateContent({
       model: targetModel,
       contents: [{ role: 'user', parts }],
       config: { 
         temperature: temperature || 0.7, 
-        maxOutputTokens: max_tokens || 4096 
+        maxOutputTokens: max_tokens || 4096,
+        // Optional: set 'high' thinking level for better insurance analysis
+        thinking: { level: 'high' } 
       }
     });
 
     return { content: result.response.text() };
 
   } catch (error) {
-    throw new Error(`Gemini SDK Error: ${error.message}`);
+    console.error('Gemini Service Error:', error);
+    throw new Error(`Gemini API error: ${error.message}`);
   }
 }
-
 
 
 
