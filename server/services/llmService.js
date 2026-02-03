@@ -1,11 +1,8 @@
 // services/llmService.js
-import fs from 'fs/promises';
-import path from 'path';
-import Anthropic from '@anthropic-ai/sdk';
-import OpenAI from 'openai';
-
-// We'll handle Gemini dynamically since it's ESM
-let GoogleGenerativeAI;
+const fs = require('fs/promises');
+const path = require('path');
+const Anthropic = require('@anthropic-ai/sdk');
+const OpenAI = require('openai');
 
 // ---------------------------------------------------------------
 // Helper: read text from common insurance/claims file types
@@ -173,29 +170,35 @@ async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max
 }
 
 // ---------------------------------------------------------------
-
 async function callGemini({ model, prompt, textFiles, imageFiles, temperature, max_tokens }) {
   try {
-    // Dynamically import the ES module
-    if (!GoogleGenerativeAI) {
-      const module = await import('@google/generative-ai');
-      GoogleGenerativeAI = module.GoogleGenerativeAI;
+    // Dynamic import for Gemini (ESM only)
+    let genAI;
+    try {
+      // Try importing the ESM module dynamically
+      const googleGenAI = await import('@google/generative-ai');
+      const { GoogleGenerativeAI } = googleGenAI;
+      genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    } catch (importError) {
+      console.error('Failed to import @google/generative-ai:', importError);
+      throw new Error('Gemini API library not available or requires ESM environment');
     }
 
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    
-    // Fix: Map common model names to correct Gemini model identifiers
+    // Map common model names to correct Gemini model identifiers
     const modelMap = {
       'gemini-1.5-pro': 'gemini-1.5-pro-latest',
       'gemini-1.5-flash': 'gemini-1.5-flash-latest',
       'gemini-pro': 'gemini-pro'
     };
-    
+
     const geminiModel = modelMap[model] || model;
+    
+    // Get the generative model
     const generativeModel = genAI.getGenerativeModel({ model: geminiModel });
 
     const parts = [{ text: prompt }];
 
+    // Add text files
     for (const filePath of textFiles) {
       const text = await extractTextFromFile(filePath);
       parts.push({
@@ -203,22 +206,34 @@ async function callGemini({ model, prompt, textFiles, imageFiles, temperature, m
       });
     }
 
+    // Add image files
     for (const imgPath of imageFiles) {
       const base64 = await fileToBase64(imgPath);
       const mime = path.extname(imgPath) === '.png' ? 'image/png' : 'image/jpeg';
       parts.push({
-        inlineData: { mimeType: mime, data: base64 }
+        inlineData: { 
+          mimeType: mime, 
+          data: base64 
+        }
       });
     }
 
+    // Generate content
     const result = await generativeModel.generateContent({
       contents: [{ role: 'user', parts }],
-      generationConfig: { temperature, maxOutputTokens: max_tokens }
+      generationConfig: { 
+        temperature, 
+        maxOutputTokens: max_tokens 
+      }
     });
 
     return { content: result.response.text() };
   } catch (error) {
     console.error('Error calling Gemini:', error);
+    // Provide a more helpful error message
+    if (error.message.includes('Cannot use import statement')) {
+      throw new Error('Gemini requires ESM environment. Consider using "type": "module" in package.json or use Node.js with ESM support.');
+    }
     throw new Error(`Gemini API error: ${error.message}`);
   }
 }
@@ -293,8 +308,10 @@ Produce clean, professional markdown suitable for file and reinsurers.
 }
 
 // ---------------------------------------------------------------
-// Export as functions, not as a default object
-export { callLLM, buildScrutinyPrompt, buildPreliminaryPrompt, buildFinalPrompt };
-exports.buildScrutinyPrompt = buildScrutinyPrompt;
-exports.buildPreliminaryPrompt = buildPreliminaryPrompt;
-exports.buildFinalPrompt = buildFinalPrompt;
+// Export all functions
+module.exports = {
+  callLLM,
+  buildScrutinyPrompt,
+  buildPreliminaryPrompt,
+  buildFinalPrompt
+};
