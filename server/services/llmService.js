@@ -172,71 +172,54 @@ async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max
 // ---------------------------------------------------------------
 async function callGemini({ model, prompt, textFiles, imageFiles, temperature, max_tokens }) {
   try {
-    // Dynamic import for Gemini (ESM only)
-    let genAI;
-    try {
-      // Try importing the ESM module dynamically
-      const googleGenAI = await import('@google/generative-ai');
-      const { GoogleGenerativeAI } = googleGenAI;
-      genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    } catch (importError) {
-      console.error('Failed to import @google/generative-ai:', importError);
-      throw new Error('Gemini API library not available or requires ESM environment');
-    }
+    // Use the new SDK for better compatibility with 2.5/3.0 models
+    const { GoogleGenAI } = await import('@google/genai');
+    const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-    // Map common model names to correct Gemini model identifiers
+    // Updated Map for 2026
     const modelMap = {
-      'gemini-1.5-pro': 'gemini-1.5-pro',
-      'gemini-1.5-flash': 'gemini-1.5-flash',
-      'gemini-pro': 'gemini-pro'
+      'gemini-1.5-pro': 'gemini-3-pro',      // Auto-migrate old requests
+      'gemini-1.5-flash': 'gemini-3-flash',  // Auto-migrate old requests
+      'gemini-3-pro': 'gemini-3-pro',
+      'gemini-3-flash': 'gemini-3-flash',
+      'gemini-2.5-pro': 'gemini-2.5-pro'
     };
 
-    const geminiModel = modelMap[model] || model;
-    
-    // Get the generative model
-    const generativeModel = genAI.getGenerativeModel({ model: geminiModel });
+    const targetModel = modelMap[model] || 'gemini-3-flash';
 
     const parts = [{ text: prompt }];
 
-    // Add text files
+    // Handle Text Files
     for (const filePath of textFiles) {
       const text = await extractTextFromFile(filePath);
-      parts.push({
-        text: `\n\n--- ${path.basename(filePath)} ---\n${text}`
-      });
+      parts.push({ text: `\n\n[File: ${path.basename(filePath)}]\n${text}` });
     }
 
-    // Add image files
+    // Handle Image Files
     for (const imgPath of imageFiles) {
       const base64 = await fileToBase64(imgPath);
       const mime = path.extname(imgPath) === '.png' ? 'image/png' : 'image/jpeg';
       parts.push({
-        inlineData: { 
-          mimeType: mime, 
-          data: base64 
-        }
+        inlineData: { mimeType: mime, data: base64 }
       });
     }
 
-    // Generate content
-    const result = await generativeModel.generateContent({
+    const result = await client.models.generateContent({
+      model: targetModel,
       contents: [{ role: 'user', parts }],
-      generationConfig: { 
-        temperature, 
+      config: { 
+        temperature: temperature || 0.7, 
         maxOutputTokens: max_tokens 
       }
     });
 
     return { content: result.response.text() };
   } catch (error) {
-    console.error('Error calling Gemini:', error);
-    // Provide a more helpful error message
-    if (error.message.includes('Cannot use import statement')) {
-      throw new Error('Gemini requires ESM environment. Consider using "type": "module" in package.json or use Node.js with ESM support.');
-    }
-    throw new Error(`Gemini API error: ${error.message}`);
+    console.error('Gemini Execution Error:', error);
+    throw error;
   }
 }
+
 
 // ---------------------------------------------------------------
 // Prompt builders
