@@ -44,9 +44,9 @@ const cpUpload = upload.fields([
 // Model mapping by AI agent
 const AI_MODELS = {
   claude: {
-    scrutiny: 'claude-3-5-sonnet-20241022',
-    interim: 'claude-3-5-sonnet-20241022',
-    final: 'claude-3-opus-20240229'
+    scrutiny: 'claude-sonnet-4-5-20250929',
+    interim: 'claude-sonnet-4-5-20250929',
+    final: 'claude-opus-4-5-20251101'
   },
   chatgpt: {
     scrutiny: 'gpt-4o',
