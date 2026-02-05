@@ -54,9 +54,9 @@ const AI_MODELS = {
     final: 'gpt-4o'
   },
   grok: {
-    scrutiny: 'grok-beta',
-    interim: 'grok-beta',
-    final: 'grok-beta'
+    scrutiny: 'grok-3',
+    interim: 'grok-3',
+    final: 'grok-3'
   },
   gemini: {
     scrutiny: 'gemini-1.5-pro',
