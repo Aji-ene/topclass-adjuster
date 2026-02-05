@@ -175,7 +175,7 @@ async function callGemini({ model, prompt, textFiles, imageFiles, temperature, m
   try {
     // 1. Initialize the new 2026 SDK
     const { GoogleGenAI } = await import('@google/genai');
-    
+
     // Explicitly set apiVersion to 'v1beta' to access Gemini 3 Preview models
     const ai = new GoogleGenAI({ 
       apiKey: process.env.GEMINI_API_KEY,
@@ -238,7 +238,8 @@ function buildScrutinyPrompt(metadata) {
       `- ${h.main}\n${h.subpoints.map(s => `  • ${s.title}`).join('\n')}`
     ).join('\n') || 'No specific focus areas provided — use standard scrutiny checklist';
 
-  return `
+  // Base scrutiny prompt
+  let prompt = `
 You are a senior insurance claims adjuster with 15+ years experience.
 Class of Business: ${metadata.classOfBusiness}
 
@@ -254,6 +255,19 @@ ${focus}
 
 Provide a professional, critical markdown report.
 `;
+
+  // Add custom analysis instructions if provided
+  if (metadata.customPrompt) {
+    prompt += `
+
+ADDITIONAL ANALYSIS REQUIRED:
+${metadata.customPrompt}
+
+Please address the above additional analysis tasks alongside the standard scrutiny process.
+`;
+  }
+
+  return prompt;
 }
 
 function buildPreliminaryPrompt(metadata) {
