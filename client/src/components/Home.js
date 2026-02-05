@@ -65,6 +65,9 @@ function Home() {
   const [photos, setPhotos] = useState([]);
 
   const [excludePhotosFromAI, setExcludePhotosFromAI] = useState(false);
+  
+  // Custom prompt for scrutiny mode
+  const [customScrutinyPrompt, setCustomScrutinyPrompt] = useState('');
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -167,6 +170,11 @@ function Home() {
     formData.append('dateOfLoss', dateOfLoss);
     formData.append('locationOfLoss', locationOfLoss);
     formData.append('lossDescription', lossDescription);
+
+    // Add custom scrutiny prompt if in scrutiny mode
+    if (selectedMode === 'scrutiny' && customScrutinyPrompt.trim()) {
+      formData.append('customScrutinyPrompt', customScrutinyPrompt.trim());
+    }
 
     const structuredHeadlines = headlines
       .filter(h => h.value.trim() || h.subpoints.some(s => s.value.trim()))
@@ -428,13 +436,38 @@ function Home() {
             </div>
 
             {selectedMode === 'scrutiny' && (
-              <Alert variant="info" className="mb-4">
-                <strong>AI Expert Mode:</strong> The AI will act as an experienced insurance claims adjuster.
-                It will review the field report in detail, ask intelligent probing questions,
-                highlight missing details, inconsistencies, or gaps in evidence,
-                suggest documents/photographs needed, and provide tailored recommendations
-                based on the selected class of business.
-              </Alert>
+              <>
+                <Alert variant="info" className="mb-4">
+                  <strong>AI Expert Mode:</strong> The AI will act as an experienced insurance claims adjuster.
+                  It will review the field report in detail, ask intelligent probing questions,
+                  highlight missing details, inconsistencies, or gaps in evidence,
+                  suggest documents/photographs needed, and provide tailored recommendations
+                  based on the selected class of business.
+                </Alert>
+
+                {/* Custom Prompt Field for Scrutiny Mode */}
+                <Card className="mb-4 border-warning">
+                  <Card.Body>
+                    <Form.Group>
+                      <Form.Label className="d-flex align-items-center gap-2">
+                        <strong>Additional Analysis Instructions</strong>
+                        <Badge bg="warning" text="dark">Optional</Badge>
+                      </Form.Label>
+                      <Form.Control
+                        as="textarea"
+                        rows={4}
+                        value={customScrutinyPrompt}
+                        onChange={e => setCustomScrutinyPrompt(e.target.value)}
+                        placeholder="Enter any specific analysis tasks you want the AI to perform alongside the standard scrutiny. Examples:&#10;• Compare this claim with similar past claims&#10;• Identify potential subrogation opportunities&#10;• Assess compliance with industry regulations&#10;• Evaluate fraud indicators&#10;• Provide risk assessment for litigation&#10;• Suggest cost-saving measures"
+                      />
+                      <Form.Text className="text-muted">
+                        This prompt will be used in addition to the standard scrutiny analysis. 
+                        Leave blank to use only the standard scrutiny process.
+                      </Form.Text>
+                    </Form.Group>
+                  </Card.Body>
+                </Card>
+              </>
             )}
 
             {/* ── File uploads ── */}
