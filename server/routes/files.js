@@ -44,9 +44,9 @@ const cpUpload = upload.fields([
 // Model mapping by AI agent
 const AI_MODELS = {
   claude: {
-    scrutiny: 'claude-3-5-sonnet-20241022',
-    interim: 'claude-3-5-sonnet-20241022',
-    final: 'claude-3-5-sonnet-20241022'
+    scrutiny: 'claude-sonnet-4-5-20250929',
+    interim: 'claude-sonnet-4-5-20250929',
+    final: 'claude-opus-4-5-20251101'
   },
   chatgpt: {
     scrutiny: 'gpt-4o',
@@ -54,9 +54,9 @@ const AI_MODELS = {
     final: 'gpt-4o'
   },
   grok: {
-    scrutiny: 'grok-beta',
-    interim: 'grok-beta',
-    final: 'grok-beta'
+    scrutiny: 'grok-3',
+    interim: 'grok-3',
+    final: 'grok-3'
   },
   gemini: {
     scrutiny: 'gemini-1.5-pro',
@@ -67,16 +67,16 @@ const AI_MODELS = {
 
 // Temperature settings by report type
 const TEMPERATURE_CONFIG = {
-  scrutiny: 0.35,
+  scrutiny: 0.4,
   interim: 0.5,
   final: 0.6
 };
 
 // Max tokens by report type
 const MAX_TOKENS_CONFIG = {
-  scrutiny: 7200,
-  interim: 6000,
-  final: 8800
+  scrutiny: 12000,
+  interim: 12000,
+  final: 12000
 };
 
 // ────────────────────────────────────────────────
