@@ -8,7 +8,6 @@ import {
   Row,
   Col,
   Badge,
-  Table,
 } from 'react-bootstrap';
 
 const CLASSES_OF_BUSINESS = [
@@ -27,6 +26,23 @@ const CLASSES_OF_BUSINESS = [
   'Property',
 ];
 
+// Required documents by class of business
+const REQUIRED_DOCUMENTS = {
+  'Marine': ['Bill of Lading', 'Survey Report', 'Marine Certificate', 'Invoice', 'Packing List'],
+  'Fire & Special Peril': ['Fire Service Report', 'Police Report', 'Building Valuation', 'Inventory List'],
+  'Oil & Gas': ['Incident Report', 'Safety Assessment', 'Equipment Inspection Report', 'Maintenance Records'],
+  'Professional Indemnity': ['Client Correspondence', 'Service Agreement', 'Professional Opinion', 'Legal Notice'],
+  'Money': ['Police Report', 'Cash Register Records', 'Bank Statements', 'Security Footage Log'],
+  'Burglary': ['Police Report', 'Break-in Assessment', 'Inventory of Stolen Items', 'Security System Report'],
+  'Theft': ['Police Report', 'Statement of Loss', 'Proof of Ownership', 'CCTV Footage'],
+  'Machinery Breakdown': ['Engineer Report', 'Maintenance History', 'Repair Estimate', 'Manufacturer Specifications'],
+  'GIT': ['Goods in Transit Certificate', 'Transport Documents', 'Consignment Note', 'Driver Statement'],
+  'Fraud': ['Police Report', 'Forensic Report', 'Transaction Records', 'Witness Statements'],
+  'Business Interruption': ['Financial Statements', 'Profit & Loss Report', 'Business Continuity Plan', 'Revenue Records'],
+  'Fidelity Guarantee': ['Employee Records', 'Audit Report', 'Financial Discrepancy Report', 'Internal Investigation'],
+  'Property': ['Property Valuation', 'Damage Assessment', 'Repair Quotations', 'Title Documents'],
+};
+
 const AI_AGENTS = [
   { value: 'claude', label: 'Claude', description: 'Anthropic - Best for detailed analysis' },
   { value: 'chatgpt', label: 'ChatGPT', description: 'OpenAI - Versatile and creative' },
@@ -34,34 +50,18 @@ const AI_AGENTS = [
   { value: 'gemini', label: 'Gemini', description: 'Google - Multimodal processing' },
 ];
 
-const DEFAULT_SCRUTINY_ITEMS = [
-  { value: 'INTRODUCTION', label: 'INTRODUCTION' },
-  { value: 'THE INSURED', label: 'THE INSURED' },
-  { value: 'INTERVIEWS', label: 'INTERVIEWS' },
-  { value: 'POLICY TERMS AND CONDITION', label: 'POLICY TERMS AND CONDITION' },
+// Default focus areas for scrutiny mode
+const DEFAULT_FOCUS_AREAS = [
+  'INTRODUCTION',
+  'THE INSURED',
+  'INTERVIEWS',
+  'POLICY TERMS AND CONDITIONS'
 ];
-
-const CLASS_DOCUMENT_REQUIREMENTS = {
-  'Marine': ['Bill of Lading', 'Survey Report', 'Insurance Certificate', 'Commercial Invoice'],
-  'Fire & Special Peril': ['Fire Brigade Report', 'Forensic Report', 'Inventory List', 'Building Plans'],
-  'Oil & Gas': ['Daily Drilling Report', 'Well Logs', 'Safety Certificates', 'Maintenance Records'],
-  'Professional Indemnity': ['Client Contract', 'Negligence Proof', 'Legal Correspondence', 'Fee Notes'],
-  'Money': ['Bank Statements', 'Security Audit', 'Cash Handling Procedures', 'Alarm Certificates'],
-  'Burglary': ['Police Report', 'Security System Logs', 'Inventory Records', 'Key Control Records'],
-  'Theft': ['Police Report', 'CCTV Footage', 'Witness Statements', 'Stock Records'],
-  'Machinery Breakdown': ['Maintenance Logs', 'Operator Certificates', 'Manufacturer Manuals', 'Service Reports'],
-  'GIT': ['Travel Itinerary', 'Boarding Passes', 'Medical Reports', 'Embassy Correspondence'],
-  'Fraud': ['Forensic Audit', 'Internal Investigation', 'Bank Statements', 'Whistleblower Statements'],
-  'Business Interruption': ['Financial Statements', 'Production Records', 'Supplier Contracts', 'Customer Orders'],
-  'Fidelity Guarantee': ['Employee Records', 'Internal Controls', 'Audit Reports', 'Bonding Certificates'],
-  'Property': ['Title Deeds', 'Valuation Reports', 'Lease Agreements', 'Building Certificates'],
-};
 
 function Home() {
   const [selectedMode, setSelectedMode] = useState('');
   const [selectedAgent, setSelectedAgent] = useState('claude');
 
-  // Claim metadata
   const [claimNumber, setClaimNumber] = useState('');
   const [policyNumber, setPolicyNumber] = useState('');
   const [insuredName, setInsuredName] = useState('');
@@ -70,17 +70,8 @@ function Home() {
   const [lossDescription, setLossDescription] = useState('');
 
   const [classOfBusiness, setClassOfBusiness] = useState('');
+  const [requiredDocsList, setRequiredDocsList] = useState([]);
 
-  // Document uploads - Policy document made optional for all modes
-  const [policyDocument, setPolicyDocument] = useState(null);
-
-  // New state for default scrutiny items
-  const [selectedScrutinyItems, setSelectedScrutinyItems] = useState([]);
-  const [interviewDetails, setInterviewDetails] = useState([
-    { id: 1, name: '', conversation: '' }
-  ]);
-
-  // Headlines / Focus areas
   const [headlines, setHeadlines] = useState(
     Array.from({ length: 8 }, (_, i) => ({
       id: i + 1,
@@ -89,8 +80,12 @@ function Home() {
     }))
   );
 
-  // File states
+  const [interviewFields, setInterviewFields] = useState([
+    { id: 1, name: '', conversation: '' }
+  ]);
+
   const [fieldReport, setFieldReport] = useState(null);
+  const [policyDocument, setPolicyDocument] = useState(null);
   const [endorsement, setEndorsement] = useState(null);
   const [additionalDocs, setAdditionalDocs] = useState([]);
   const [supportingDocs, setSupportingDocs] = useState([]);
@@ -103,40 +98,14 @@ function Home() {
   const [error, setError] = useState(null);
   const [generatedReport, setGeneratedReport] = useState(null);
 
-  // Update document requirements when class changes
-  const [documentRequirements, setDocumentRequirements] = useState([]);
-
   useEffect(() => {
-    if (classOfBusiness && CLASS_DOCUMENT_REQUIREMENTS[classOfBusiness]) {
-      setDocumentRequirements(CLASS_DOCUMENT_REQUIREMENTS[classOfBusiness]);
+    if (classOfBusiness) {
+      setRequiredDocsList(REQUIRED_DOCUMENTS[classOfBusiness] || []);
     } else {
-      setDocumentRequirements([]);
+      setRequiredDocsList([]);
     }
   }, [classOfBusiness]);
 
-  // ───────────────────────────────────────────────
-  // New Interview handlers
-  // ───────────────────────────────────────────────
-  const addInterview = () => {
-    const newId = Math.max(...interviewDetails.map(i => i.id), 0) + 1;
-    setInterviewDetails([...interviewDetails, { id: newId, name: '', conversation: '' }]);
-  };
-
-  const removeInterview = (id) => {
-    if (interviewDetails.length > 1) {
-      setInterviewDetails(interviewDetails.filter(i => i.id !== id));
-    }
-  };
-
-  const updateInterview = (id, field, value) => {
-    setInterviewDetails(interviewDetails.map(i => 
-      i.id === id ? { ...i, [field]: value } : i
-    ));
-  };
-
-  // ───────────────────────────────────────────────
-  // Headline helpers
-  // ───────────────────────────────────────────────
   const addHeadline = () => {
     const newId = Math.max(...headlines.map(h => h.id), 0) + 1;
     setHeadlines([...headlines, { id: newId, value: '', subpoints: [] }]);
@@ -181,9 +150,25 @@ function Home() {
     }));
   };
 
-  // ───────────────────────────────────────────────
-  // File helpers
-  // ───────────────────────────────────────────────
+  const addInterviewField = () => {
+    const newId = Math.max(...interviewFields.map(f => f.id), 0) + 1;
+    setInterviewFields([...interviewFields, { id: newId, name: '', conversation: '' }]);
+  };
+
+  const removeInterviewField = (id) => {
+    setInterviewFields(interviewFields.filter(f => f.id !== id));
+  };
+
+  const updateInterviewField = (id, field, value) => {
+    setInterviewFields(interviewFields.map(f => 
+      f.id === id ? { ...f, [field]: value } : f
+    ));
+  };
+
+  const hasInterviewsSelected = headlines.some(h => 
+    h.value.toUpperCase().includes('INTERVIEW')
+  );
+
   const handleFileChange = (setter) => (e) => {
     if (e.target.files?.[0]) {
       setter(e.target.files[0]);
@@ -204,18 +189,14 @@ function Home() {
     setPhotos(prev => prev.filter((_, i) => i !== index));
   };
 
-  // ───────────────────────────────────────────────
-  // Report generation
-  // ───────────────────────────────────────────────
   const handleGenerate = async () => {
     if (!selectedMode) return setError('Please select a mode');
     if (!selectedAgent) return setError('Please select an AI agent');
     if (!classOfBusiness) return setError('Please select Class of Business');
     if (!fieldReport) return setError('Please upload the Field Report');
 
-    // Policy document is now optional for all modes
     if (selectedMode === 'final' && !policyDocument) {
-      console.warn('Policy document not provided for Final Report - analysis may be limited');
+      return setError('Please upload the Policy Document for Final Report');
     }
 
     const formData = new FormData();
@@ -233,17 +214,14 @@ function Home() {
     formData.append('locationOfLoss', locationOfLoss);
     formData.append('lossDescription', lossDescription);
 
-    // Add default scrutiny items
-    formData.append('scrutinyItems', JSON.stringify(selectedScrutinyItems));
-
-    // Add interview details if any
-    if (selectedScrutinyItems.includes('INTERVIEWS')) {
-      formData.append('interviewDetails', JSON.stringify(interviewDetails.filter(i => i.name.trim() || i.conversation.trim())));
-    }
-
-    // Add custom scrutiny prompt if in scrutiny mode
     if (selectedMode === 'scrutiny' && customScrutinyPrompt.trim()) {
       formData.append('customScrutinyPrompt', customScrutinyPrompt.trim());
+    }
+
+    if (hasInterviewsSelected) {
+      formData.append('interviews', JSON.stringify(interviewFields.filter(f => 
+        f.name.trim() || f.conversation.trim()
+      )));
     }
 
     const structuredHeadlines = headlines
@@ -264,12 +242,11 @@ function Home() {
 
     formData.append('questionnaire', fieldReport);
 
-    // Always include policy document if uploaded (now optional)
     if (policyDocument) {
       formData.append('policyDocument', policyDocument);
     }
-
-    if (selectedMode === 'final' && endorsement) {
+    
+    if (endorsement) {
       formData.append('endorsement', endorsement);
     }
 
@@ -277,10 +254,7 @@ function Home() {
       formData.append('additionalDocs', file)
     );
 
-    // Add photos only if there are any uploaded
-    if (photos.length > 0) {
-      photos.forEach(photo => formData.append('photos', photo));
-    }
+    photos.forEach(photo => formData.append('photos', photo));
 
     setLoading(true);
     setError(null);
@@ -292,31 +266,17 @@ function Home() {
         body: formData,
       });
 
-      // Check if response is JSON
-      const contentType = response.headers.get('content-type');
-      if (!contentType || !contentType.includes('application/json')) {
-        const text = await response.text();
-        console.error('Non-JSON response:', text.substring(0, 500));
-        throw new Error('Server returned non-JSON response. Check server logs.');
-      }
-
       const data = await response.json();
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || `Server error: ${response.status}`);
-      }
+      if (!data.success) throw new Error(data.message || 'Failed to process');
 
       setGeneratedReport(data.report);
     } catch (err) {
       setError(err.message || 'Error generating report');
-      console.error('Generation error:', err);
     } finally {
       setLoading(false);
     }
   };
 
-  // ───────────────────────────────────────────────
-  // Download handlers
-  // ───────────────────────────────────────────────
   const downloadReportAsTxt = () => {
     if (!generatedReport) return;
     const blob = new Blob([generatedReport], { type: 'text/plain' });
@@ -342,10 +302,11 @@ function Home() {
             reportType: selectedMode === 'preliminary' ? 'interim' : selectedMode,
             aiAgent: selectedAgent,
             claimNumber,
-            classOfBusiness,
+            policyNumber,
             insuredName,
             dateOfLoss,
             locationOfLoss,
+            classOfBusiness,
             generatedAt: new Date().toISOString(),
           }
         })
@@ -368,66 +329,12 @@ function Home() {
     }
   };
 
-  // Render report in table format
-  const renderReportWithTable = (report) => {
-    if (!report) return report;
-    
-    // Create metadata table
-    const metadataTable = `
-<style>
-.report-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-bottom: 20px;
-  font-family: 'Times New Roman', serif;
-  font-size: 12pt;
-}
-.report-table td {
-  padding: 8px 12px;
-  border: none;
-  vertical-align: top;
-  line-height: 1.5;
-}
-.report-label {
-  font-weight: bold;
-  width: 30%;
-  background-color: #f8f9fa;
-}
-</style>
-
-<table class="report-table">
-  <tr>
-    <td class="report-label">Claim Number:</td>
-    <td>${claimNumber || 'Not provided'}</td>
-    <td class="report-label">Policy Number:</td>
-    <td>${policyNumber || 'Not provided'}</td>
-  </tr>
-  <tr>
-    <td class="report-label">Insured Name:</td>
-    <td>${insuredName || 'Not provided'}</td>
-    <td class="report-label">Class of Business:</td>
-    <td>${classOfBusiness || 'Not provided'}</td>
-  </tr>
-  <tr>
-    <td class="report-label">Date of Loss:</td>
-    <td>${dateOfLoss || 'Not provided'}</td>
-    <td class="report-label">Location of Loss:</td>
-    <td>${locationOfLoss || 'Not provided'}</td>
-  </tr>
-</table>
-
-${report.replace(/^[\s\S]*?(?=\n\n|$)/, '')}`;
-
-    return metadataTable;
-  };
-
   return (
     <Container className="py-4">
       <h1 className="mb-4 text-center">Topclass Adjusters Claims Processing</h1>
 
       <Card className="mb-4">
         <Card.Body>
-          {/* ── Class of Business & Task & AI Agent selection ── */}
           <Form.Group className="mb-4">
             <Form.Label>Select Class of Business</Form.Label>
             <Form.Select 
@@ -441,15 +348,17 @@ ${report.replace(/^[\s\S]*?(?=\n\n|$)/, '')}`;
             </Form.Select>
           </Form.Group>
 
-          {classOfBusiness && documentRequirements.length > 0 && (
+          {requiredDocsList.length > 0 && (
             <Alert variant="info" className="mb-4">
               <strong>Suggested Documents for {classOfBusiness}:</strong>
               <ul className="mb-0 mt-2">
-                {documentRequirements.map((doc, idx) => (
+                {requiredDocsList.map((doc, idx) => (
                   <li key={idx}>{doc}</li>
                 ))}
               </ul>
-              <small className="text-muted">These documents are recommended but not mandatory</small>
+              <small className="text-muted d-block mt-2">
+                Note: These are recommended but not mandatory
+              </small>
             </Alert>
           )}
 
@@ -508,7 +417,6 @@ ${report.replace(/^[\s\S]*?(?=\n\n|$)/, '')}`;
             </Row>
           </Form.Group>
 
-          {/* Claim metadata fields – shown after mode is selected */}
           {selectedMode && (
             <>
               <Row>
@@ -599,85 +507,6 @@ ${report.replace(/^[\s\S]*?(?=\n\n|$)/, '')}`;
                   based on the selected class of business.
                 </Alert>
 
-                {/* Default Scrutiny Items */}
-                <Card className="mb-4">
-                  <Card.Body>
-                    <Form.Group>
-                      <Form.Label><strong>Select Default Focus Areas</strong></Form.Label>
-                      <Form.Text className="text-muted d-block mb-2">
-                        Choose from predefined focus areas or add custom ones below
-                      </Form.Text>
-                      <div className="mb-3">
-                        {DEFAULT_SCRUTINY_ITEMS.map(item => (
-                          <Form.Check
-                            key={item.value}
-                            type="checkbox"
-                            id={`scrutiny-${item.value}`}
-                            label={item.label}
-                            checked={selectedScrutinyItems.includes(item.value)}
-                            onChange={(e) => {
-                              if (e.target.checked) {
-                                setSelectedScrutinyItems([...selectedScrutinyItems, item.value]);
-                              } else {
-                                setSelectedScrutinyItems(selectedScrutinyItems.filter(i => i !== item.value));
-                              }
-                            }}
-                            className="mb-2"
-                          />
-                        ))}
-                      </div>
-                    </Form.Group>
-                  </Card.Body>
-                </Card>
-
-                {/* Interview Details - Only shown if INTERVIEWS is selected */}
-                {selectedScrutinyItems.includes('INTERVIEWS') && (
-                  <Card className="mb-4 border-primary">
-                    <Card.Body>
-                      <div className="d-flex justify-content-between align-items-center mb-3">
-                        <h5 className="mb-0">Interview Details</h5>
-                        <Button variant="outline-primary" size="sm" onClick={addInterview}>
-                          + Add Interview
-                        </Button>
-                      </div>
-                      {interviewDetails.map(interview => (
-                        <Card key={interview.id} className="mb-3">
-                          <Card.Body>
-                            <Row className="mb-2">
-                              <Col md={6}>
-                                <Form.Control
-                                  placeholder="Interviewee Name"
-                                  value={interview.name}
-                                  onChange={(e) => updateInterview(interview.id, 'name', e.target.value)}
-                                />
-                              </Col>
-                              <Col md={6} className="d-flex align-items-start">
-                                {interviewDetails.length > 1 && (
-                                  <Button 
-                                    variant="outline-danger" 
-                                    size="sm"
-                                    onClick={() => removeInterview(interview.id)}
-                                  >
-                                    Remove
-                                  </Button>
-                                )}
-                              </Col>
-                            </Row>
-                            <Form.Control
-                              as="textarea"
-                              rows={3}
-                              placeholder="Conversation details..."
-                              value={interview.conversation}
-                              onChange={(e) => updateInterview(interview.id, 'conversation', e.target.value)}
-                            />
-                          </Card.Body>
-                        </Card>
-                      ))}
-                    </Card.Body>
-                  </Card>
-                )}
-
-                {/* Custom Prompt Field for Scrutiny Mode */}
                 <Card className="mb-4 border-warning">
                   <Card.Body>
                     <Form.Group>
@@ -690,11 +519,10 @@ ${report.replace(/^[\s\S]*?(?=\n\n|$)/, '')}`;
                         rows={4}
                         value={customScrutinyPrompt}
                         onChange={e => setCustomScrutinyPrompt(e.target.value)}
-                        placeholder="Enter any specific analysis tasks you want the AI to perform alongside the standard scrutiny. Examples:&#10;• Compare this claim with similar past claims&#10;• Identify potential subrogation opportunities&#10;• Assess compliance with industry regulations&#10;• Evaluate fraud indicators&#10;• Provide risk assessment for litigation&#10;• Suggest cost-saving measures"
+                        placeholder="Enter any specific analysis tasks..."
                       />
                       <Form.Text className="text-muted">
-                        This prompt will be used in addition to the standard scrutiny analysis. 
-                        Leave blank to use only the standard scrutiny process.
+                        This prompt will be used in addition to the standard scrutiny analysis.
                       </Form.Text>
                     </Form.Group>
                   </Card.Body>
@@ -702,7 +530,6 @@ ${report.replace(/^[\s\S]*?(?=\n\n|$)/, '')}`;
               </>
             )}
 
-            {/* ── File uploads ── */}
             <Form.Group className="mb-4">
               <Form.Label>Upload Field Report (required)</Form.Label>
               <Form.Control
@@ -713,89 +540,63 @@ ${report.replace(/^[\s\S]*?(?=\n\n|$)/, '')}`;
               {fieldReport && <small className="text-success d-block mt-1">✓ {fieldReport.name}</small>}
             </Form.Group>
 
-            {/* Policy Document - Now optional for all modes */}
             <Form.Group className="mb-4">
-              <Form.Label>Upload Policy Document (optional)</Form.Label>
+              <Form.Label>
+                Upload Policy Document {selectedMode === 'final' ? '(required)' : '(optional)'}
+              </Form.Label>
               <Form.Control 
                 type="file" 
                 accept=".docx,.pdf,.txt" 
                 onChange={handleFileChange(setPolicyDocument)} 
               />
-              <Form.Text className="text-muted">
-                Recommended for better analysis. The AI will read through the policy if provided.
-              </Form.Text>
               {policyDocument && <small className="text-success d-block mt-1">✓ {policyDocument.name}</small>}
             </Form.Group>
 
+            <Form.Group className="mb-4">
+              <Form.Label>Upload Endorsement (optional)</Form.Label>
+              <Form.Control 
+                type="file" 
+                accept=".docx,.pdf,.txt" 
+                onChange={handleFileChange(setEndorsement)} 
+              />
+              {endorsement && <small className="text-success d-block mt-1">✓ {endorsement.name}</small>}
+            </Form.Group>
+
+            <Form.Group className="mb-4">
+              <Form.Label>Additional Documents</Form.Label>
+              <Form.Control 
+                type="file" 
+                multiple 
+                accept=".docx,.pdf,.txt,.xls,.xlsx" 
+                onChange={handleMultipleFiles(setAdditionalDocs)} 
+              />
+              {additionalDocs.length > 0 && (
+                <div className="mt-2">
+                  {additionalDocs.map((file, idx) => (
+                    <Badge key={idx} bg="secondary" className="me-2 mb-1">
+                      {file.name}
+                      <Button variant="link" size="sm" className="text-white p-0 ms-1" onClick={removeFileFromList(setAdditionalDocs, idx)}>×</Button>
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </Form.Group>
+
             {selectedMode === 'final' && (
-              <>
-                <Form.Group className="mb-4">
-                  <Form.Label>Upload Endorsement (optional)</Form.Label>
-                  <Form.Control 
-                    type="file" 
-                    accept=".docx,.pdf,.txt" 
-                    onChange={handleFileChange(setEndorsement)} 
-                  />
-                  {endorsement && <small className="text-success d-block mt-1">✓ {endorsement.name}</small>}
-                </Form.Group>
-
-                <Form.Group className="mb-4">
-                  <Form.Label>Additional Documents</Form.Label>
-                  <Form.Control 
-                    type="file" 
-                    multiple 
-                    accept=".docx,.pdf,.txt,.xls,.xlsx" 
-                    onChange={handleMultipleFiles(setAdditionalDocs)} 
-                  />
-                  {additionalDocs.length > 0 && (
-                    <div className="mt-2">
-                      {additionalDocs.map((file, idx) => (
-                        <Badge key={idx} bg="secondary" className="me-2 mb-1">
-                          {file.name}
-                          <Button variant="link" size="sm" className="text-white p-0 ms-1" onClick={removeFileFromList(setAdditionalDocs, idx)}>×</Button>
-                        </Badge>
-                      ))}
-                    </div>
-                  )}
-                </Form.Group>
-
-                <Form.Group className="mb-4">
-                  <Form.Label>Supporting Documents</Form.Label>
-                  <Form.Control 
-                    type="file" 
-                    multiple 
-                    accept=".docx,.pdf,.txt,.xls,.xlsx" 
-                    onChange={handleMultipleFiles(setSupportingDocs)} 
-                  />
-                  {supportingDocs.length > 0 && (
-                    <div className="mt-2">
-                      {supportingDocs.map((file, idx) => (
-                        <Badge key={idx} bg="secondary" className="me-2 mb-1">
-                          {file.name}
-                          <Button variant="link" size="sm" className="text-white p-0 ms-1" onClick={removeFileFromList(setSupportingDocs, idx)}>×</Button>
-                        </Badge>
-                      ))}
-                    </div>
-                  )}
-                </Form.Group>
-              </>
-            )}
-
-            {(selectedMode === 'preliminary' || selectedMode === 'scrutiny') && (
               <Form.Group className="mb-4">
-                <Form.Label>Additional Documents (optional)</Form.Label>
+                <Form.Label>Supporting Documents</Form.Label>
                 <Form.Control 
                   type="file" 
                   multiple 
                   accept=".docx,.pdf,.txt,.xls,.xlsx" 
-                  onChange={handleMultipleFiles(setAdditionalDocs)} 
+                  onChange={handleMultipleFiles(setSupportingDocs)} 
                 />
-                {additionalDocs.length > 0 && (
+                {supportingDocs.length > 0 && (
                   <div className="mt-2">
-                    {additionalDocs.map((file, idx) => (
+                    {supportingDocs.map((file, idx) => (
                       <Badge key={idx} bg="secondary" className="me-2 mb-1">
                         {file.name}
-                        <Button variant="link" size="sm" className="text-white p-0 ms-1" onClick={removeFileFromList(setAdditionalDocs, idx)}>×</Button>
+                        <Button variant="link" size="sm" className="text-white p-0 ms-1" onClick={removeFileFromList(setSupportingDocs, idx)}>×</Button>
                       </Badge>
                     ))}
                   </div>
@@ -803,18 +604,27 @@ ${report.replace(/^[\s\S]*?(?=\n\n|$)/, '')}`;
               </Form.Group>
             )}
 
-            {/* Headlines */}
             <h5 className="mb-3">
-              {selectedMode === 'scrutiny' ? 'Custom Focus Areas' : 'Report Arrangement'}
+              {selectedMode === 'scrutiny' ? 'Key Focus Areas for Scrutiny' : 'Report Arrangement'}
             </h5>
 
             {headlines.map(headline => (
               <Card key={headline.id} className="mb-3">
                 <Card.Body>
                   <div className="d-flex gap-2 mb-2">
-                    <Form.Control
-                      placeholder={`Headline ${headline.id}`}
+                    <Form.Select
                       value={headline.value}
+                      onChange={e => updateHeadline(headline.id, e.target.value)}
+                      className="me-2"
+                    >
+                      <option value="">-- Select or type custom --</option>
+                      {DEFAULT_FOCUS_AREAS.map(area => (
+                        <option key={area} value={area}>{area}</option>
+                      ))}
+                    </Form.Select>
+                    <Form.Control
+                      placeholder={`Or type custom headline ${headline.id}`}
+                      value={!DEFAULT_FOCUS_AREAS.includes(headline.value) ? headline.value : ''}
                       onChange={e => updateHeadline(headline.id, e.target.value)}
                     />
                     <Button variant="outline-danger" size="sm" onClick={() => removeHeadline(headline.id)}>
@@ -847,71 +657,101 @@ ${report.replace(/^[\s\S]*?(?=\n\n|$)/, '')}`;
               + Add Headline
             </Button>
 
-            {/* Photo Uploads with Exclude Option */}
-            <Card className="mb-4">
-              <Card.Body>
-                <div className="d-flex justify-content-between align-items-center mb-3">
-                  <h5 className="mb-0">Upload Photos / Evidence</h5>
-                  <Form.Check
-                    type="switch"
-                    id="exclude-photos-switch"
-                    label="Exclude from AI processing"
-                    checked={excludePhotosFromAI}
-                    onChange={(e) => setExcludePhotosFromAI(e.target.checked)}
-                    className="mb-0"
-                  />
-                </div>
-                
-                <Form.Group>
-                  <Form.Label>Select Photos (optional)</Form.Label>
-                  <Form.Control
-                    type="file"
-                    multiple
-                    accept="image/*"
-                    onChange={handleMultipleFiles(setPhotos)}
-                  />
-                  <Form.Text className="text-muted">
-                    {excludePhotosFromAI 
-                      ? "Photos will be stored but excluded from AI analysis"
-                      : "Photos will be analyzed by AI and included in the report"}
-                  </Form.Text>
-                  
-                  {photos.length > 0 && (
-                    <div className="mt-2">
-                      <Row>
-                        {photos.map((photo, idx) => (
-                          <Col key={idx} xs={6} md={4} lg={3} className="mb-2">
-                            <div className="position-relative">
-                              <img 
-                                src={URL.createObjectURL(photo)} 
-                                alt={`Evidence ${idx + 1}`}
-                                className="img-thumbnail w-100"
-                                style={{ height: '150px', objectFit: 'cover' }}
+            {hasInterviewsSelected && (
+              <Card className="mb-4 border-info">
+                <Card.Body>
+                  <h5 className="mb-3">Interview Details</h5>
+                  {interviewFields.map(field => (
+                    <Card key={field.id} className="mb-3">
+                      <Card.Body>
+                        <Row>
+                          <Col md={4}>
+                            <Form.Group className="mb-2">
+                              <Form.Label>Name of Person Interviewed</Form.Label>
+                              <Form.Control
+                                placeholder="e.g. John Doe, Operations Manager"
+                                value={field.name}
+                                onChange={e => updateInterviewField(field.id, 'name', e.target.value)}
                               />
-                              <Button 
-                                variant="danger" 
-                                size="sm"
-                                className="position-absolute top-0 end-0 m-1"
-                                onClick={removePhoto(idx)}
-                              >
-                                ×
-                              </Button>
-                            </div>
+                            </Form.Group>
                           </Col>
-                        ))}
-                      </Row>
-                      <div className="mt-2 text-muted">
-                        <small>
-                          {excludePhotosFromAI 
-                            ? "✓ Photos will be stored only (not analyzed by AI)"
-                            : "✓ Photos will be analyzed by AI"}
-                        </small>
-                      </div>
-                    </div>
-                  )}
-                </Form.Group>
-              </Card.Body>
-            </Card>
+                          <Col md={8}>
+                            <Form.Group className="mb-2">
+                              <Form.Label>Conversation Summary</Form.Label>
+                              <Form.Control
+                                as="textarea"
+                                rows={2}
+                                placeholder="Key points from the interview..."
+                                value={field.conversation}
+                                onChange={e => updateInterviewField(field.id, 'conversation', e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                        </Row>
+                        {interviewFields.length > 1 && (
+                          <Button 
+                            variant="outline-danger" 
+                            size="sm" 
+                            onClick={() => removeInterviewField(field.id)}
+                          >
+                            Remove Interview
+                          </Button>
+                        )}
+                      </Card.Body>
+                    </Card>
+                  ))}
+                  <Button variant="outline-primary" size="sm" onClick={addInterviewField}>
+                    + Add Another Interview
+                  </Button>
+                </Card.Body>
+              </Card>
+            )}
+
+            <Form.Group className="mb-4">
+              <Form.Check
+                type="checkbox"
+                label="Exclude uploaded photos from AI processing"
+                checked={excludePhotosFromAI}
+                onChange={e => setExcludePhotosFromAI(e.target.checked)}
+              />
+            </Form.Group>
+
+            <Form.Group className="mb-4">
+              <Form.Label>Upload Photos / Evidence</Form.Label>
+              <Form.Control
+                type="file"
+                multiple
+                accept="image/*"
+                onChange={handleMultipleFiles(setPhotos)}
+                disabled={excludePhotosFromAI}
+              />
+              {photos.length > 0 && (
+                <div className="mt-2">
+                  <Row>
+                    {photos.map((photo, idx) => (
+                      <Col key={idx} xs={6} md={4} lg={3} className="mb-2">
+                        <div className="position-relative">
+                          <img 
+                            src={URL.createObjectURL(photo)} 
+                            alt={`Evidence ${idx + 1}`}
+                            className="img-thumbnail w-100"
+                            style={{ height: '150px', objectFit: 'cover' }}
+                          />
+                          <Button 
+                            variant="danger" 
+                            size="sm"
+                            className="position-absolute top-0 end-0 m-1"
+                            onClick={removePhoto(idx)}
+                          >
+                            ×
+                          </Button>
+                        </div>
+                      </Col>
+                    ))}
+                  </Row>
+                </div>
+              )}
+            </Form.Group>
 
             <div className="text-center mt-4">
               <Button
@@ -948,17 +788,19 @@ ${report.replace(/^[\s\S]*?(?=\n\n|$)/, '')}`;
               </div>
             </div>
 
-            <div 
-              className="p-3 rounded border"
+            <pre 
+              className="bg-light p-3 rounded" 
               style={{ 
                 maxHeight: '500px', 
                 overflow: 'auto',
                 fontFamily: 'Times New Roman, serif',
                 fontSize: '12pt',
-                lineHeight: '1.5'
+                lineHeight: '1.5',
+                whiteSpace: 'pre-wrap'
               }}
-              dangerouslySetInnerHTML={{ __html: renderReportWithTable(generatedReport) }}
-            />
+            >
+              {generatedReport}
+            </pre>
           </Card.Body>
         </Card>
       )}
