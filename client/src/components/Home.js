@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Container,
   Button,
@@ -8,6 +8,7 @@ import {
   Row,
   Col,
   Badge,
+  Table,
 } from 'react-bootstrap';
 
 const CLASSES_OF_BUSINESS = [
@@ -33,8 +34,31 @@ const AI_AGENTS = [
   { value: 'gemini', label: 'Gemini', description: 'Google - Multimodal processing' },
 ];
 
+const DEFAULT_SCRUTINY_ITEMS = [
+  { value: 'INTRODUCTION', label: 'INTRODUCTION' },
+  { value: 'THE INSURED', label: 'THE INSURED' },
+  { value: 'INTERVIEWS', label: 'INTERVIEWS' },
+  { value: 'POLICY TERMS AND CONDITION', label: 'POLICY TERMS AND CONDITION' },
+];
+
+const CLASS_DOCUMENT_REQUIREMENTS = {
+  'Marine': ['Bill of Lading', 'Survey Report', 'Insurance Certificate', 'Commercial Invoice'],
+  'Fire & Special Peril': ['Fire Brigade Report', 'Forensic Report', 'Inventory List', 'Building Plans'],
+  'Oil & Gas': ['Daily Drilling Report', 'Well Logs', 'Safety Certificates', 'Maintenance Records'],
+  'Professional Indemnity': ['Client Contract', 'Negligence Proof', 'Legal Correspondence', 'Fee Notes'],
+  'Money': ['Bank Statements', 'Security Audit', 'Cash Handling Procedures', 'Alarm Certificates'],
+  'Burglary': ['Police Report', 'Security System Logs', 'Inventory Records', 'Key Control Records'],
+  'Theft': ['Police Report', 'CCTV Footage', 'Witness Statements', 'Stock Records'],
+  'Machinery Breakdown': ['Maintenance Logs', 'Operator Certificates', 'Manufacturer Manuals', 'Service Reports'],
+  'GIT': ['Travel Itinerary', 'Boarding Passes', 'Medical Reports', 'Embassy Correspondence'],
+  'Fraud': ['Forensic Audit', 'Internal Investigation', 'Bank Statements', 'Whistleblower Statements'],
+  'Business Interruption': ['Financial Statements', 'Production Records', 'Supplier Contracts', 'Customer Orders'],
+  'Fidelity Guarantee': ['Employee Records', 'Internal Controls', 'Audit Reports', 'Bonding Certificates'],
+  'Property': ['Title Deeds', 'Valuation Reports', 'Lease Agreements', 'Building Certificates'],
+};
+
 function Home() {
-  const [selectedMode, setSelectedMode] = useState(''); // 'scrutiny' | 'preliminary' | 'final'
+  const [selectedMode, setSelectedMode] = useState('');
   const [selectedAgent, setSelectedAgent] = useState('claude');
 
   // Claim metadata
@@ -47,6 +71,15 @@ function Home() {
 
   const [classOfBusiness, setClassOfBusiness] = useState('');
 
+  // Document uploads - Policy document made optional for all modes
+  const [policyDocument, setPolicyDocument] = useState(null);
+
+  // New state for default scrutiny items
+  const [selectedScrutinyItems, setSelectedScrutinyItems] = useState([]);
+  const [interviewDetails, setInterviewDetails] = useState([
+    { id: 1, name: '', conversation: '' }
+  ]);
+
   // Headlines / Focus areas
   const [headlines, setHeadlines] = useState(
     Array.from({ length: 8 }, (_, i) => ({
@@ -58,20 +91,48 @@ function Home() {
 
   // File states
   const [fieldReport, setFieldReport] = useState(null);
-  const [policyDocument, setPolicyDocument] = useState(null);
   const [endorsement, setEndorsement] = useState(null);
   const [additionalDocs, setAdditionalDocs] = useState([]);
   const [supportingDocs, setSupportingDocs] = useState([]);
   const [photos, setPhotos] = useState([]);
 
   const [excludePhotosFromAI, setExcludePhotosFromAI] = useState(false);
-  
-  // Custom prompt for scrutiny mode
   const [customScrutinyPrompt, setCustomScrutinyPrompt] = useState('');
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [generatedReport, setGeneratedReport] = useState(null);
+
+  // Update document requirements when class changes
+  const [documentRequirements, setDocumentRequirements] = useState([]);
+
+  useEffect(() => {
+    if (classOfBusiness && CLASS_DOCUMENT_REQUIREMENTS[classOfBusiness]) {
+      setDocumentRequirements(CLASS_DOCUMENT_REQUIREMENTS[classOfBusiness]);
+    } else {
+      setDocumentRequirements([]);
+    }
+  }, [classOfBusiness]);
+
+  // ───────────────────────────────────────────────
+  // New Interview handlers
+  // ───────────────────────────────────────────────
+  const addInterview = () => {
+    const newId = Math.max(...interviewDetails.map(i => i.id), 0) + 1;
+    setInterviewDetails([...interviewDetails, { id: newId, name: '', conversation: '' }]);
+  };
+
+  const removeInterview = (id) => {
+    if (interviewDetails.length > 1) {
+      setInterviewDetails(interviewDetails.filter(i => i.id !== id));
+    }
+  };
+
+  const updateInterview = (id, field, value) => {
+    setInterviewDetails(interviewDetails.map(i => 
+      i.id === id ? { ...i, [field]: value } : i
+    ));
+  };
 
   // ───────────────────────────────────────────────
   // Headline helpers
@@ -152,8 +213,9 @@ function Home() {
     if (!classOfBusiness) return setError('Please select Class of Business');
     if (!fieldReport) return setError('Please upload the Field Report');
 
+    // Policy document is now optional for all modes
     if (selectedMode === 'final' && !policyDocument) {
-      return setError('Please upload the Policy Document for Final Report');
+      console.warn('Policy document not provided for Final Report - analysis may be limited');
     }
 
     const formData = new FormData();
@@ -170,6 +232,14 @@ function Home() {
     formData.append('dateOfLoss', dateOfLoss);
     formData.append('locationOfLoss', locationOfLoss);
     formData.append('lossDescription', lossDescription);
+
+    // Add default scrutiny items
+    formData.append('scrutinyItems', JSON.stringify(selectedScrutinyItems));
+
+    // Add interview details if any
+    if (selectedScrutinyItems.includes('INTERVIEWS')) {
+      formData.append('interviewDetails', JSON.stringify(interviewDetails.filter(i => i.name.trim() || i.conversation.trim())));
+    }
 
     // Add custom scrutiny prompt if in scrutiny mode
     if (selectedMode === 'scrutiny' && customScrutinyPrompt.trim()) {
@@ -194,16 +264,21 @@ function Home() {
 
     formData.append('questionnaire', fieldReport);
 
-    if (selectedMode === 'final') {
-      formData.append('analyzedFile', policyDocument);
-      if (endorsement) formData.append('endorsement', endorsement);
+    // Always include policy document if uploaded (now optional)
+    if (policyDocument) {
+      formData.append('policyDocument', policyDocument);
+    }
+
+    if (selectedMode === 'final' && endorsement) {
+      formData.append('endorsement', endorsement);
     }
 
     [...additionalDocs, ...supportingDocs].forEach(file => 
       formData.append('additionalDocs', file)
     );
 
-    if (!excludePhotosFromAI) {
+    // Add photos only if there are any uploaded
+    if (photos.length > 0) {
       photos.forEach(photo => formData.append('photos', photo));
     }
 
@@ -217,12 +292,23 @@ function Home() {
         body: formData,
       });
 
+      // Check if response is JSON
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        console.error('Non-JSON response:', text.substring(0, 500));
+        throw new Error('Server returned non-JSON response. Check server logs.');
+      }
+
       const data = await response.json();
-      if (!data.success) throw new Error(data.message || 'Failed to process');
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || `Server error: ${response.status}`);
+      }
 
       setGeneratedReport(data.report);
     } catch (err) {
       setError(err.message || 'Error generating report');
+      console.error('Generation error:', err);
     } finally {
       setLoading(false);
     }
@@ -257,6 +343,9 @@ function Home() {
             aiAgent: selectedAgent,
             claimNumber,
             classOfBusiness,
+            insuredName,
+            dateOfLoss,
+            locationOfLoss,
             generatedAt: new Date().toISOString(),
           }
         })
@@ -279,6 +368,59 @@ function Home() {
     }
   };
 
+  // Render report in table format
+  const renderReportWithTable = (report) => {
+    if (!report) return report;
+    
+    // Create metadata table
+    const metadataTable = `
+<style>
+.report-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 20px;
+  font-family: 'Times New Roman', serif;
+  font-size: 12pt;
+}
+.report-table td {
+  padding: 8px 12px;
+  border: none;
+  vertical-align: top;
+  line-height: 1.5;
+}
+.report-label {
+  font-weight: bold;
+  width: 30%;
+  background-color: #f8f9fa;
+}
+</style>
+
+<table class="report-table">
+  <tr>
+    <td class="report-label">Claim Number:</td>
+    <td>${claimNumber || 'Not provided'}</td>
+    <td class="report-label">Policy Number:</td>
+    <td>${policyNumber || 'Not provided'}</td>
+  </tr>
+  <tr>
+    <td class="report-label">Insured Name:</td>
+    <td>${insuredName || 'Not provided'}</td>
+    <td class="report-label">Class of Business:</td>
+    <td>${classOfBusiness || 'Not provided'}</td>
+  </tr>
+  <tr>
+    <td class="report-label">Date of Loss:</td>
+    <td>${dateOfLoss || 'Not provided'}</td>
+    <td class="report-label">Location of Loss:</td>
+    <td>${locationOfLoss || 'Not provided'}</td>
+  </tr>
+</table>
+
+${report.replace(/^[\s\S]*?(?=\n\n|$)/, '')}`;
+
+    return metadataTable;
+  };
+
   return (
     <Container className="py-4">
       <h1 className="mb-4 text-center">Topclass Adjusters Claims Processing</h1>
@@ -298,6 +440,18 @@ function Home() {
               ))}
             </Form.Select>
           </Form.Group>
+
+          {classOfBusiness && documentRequirements.length > 0 && (
+            <Alert variant="info" className="mb-4">
+              <strong>Suggested Documents for {classOfBusiness}:</strong>
+              <ul className="mb-0 mt-2">
+                {documentRequirements.map((doc, idx) => (
+                  <li key={idx}>{doc}</li>
+                ))}
+              </ul>
+              <small className="text-muted">These documents are recommended but not mandatory</small>
+            </Alert>
+          )}
 
           <Form.Group className="mb-4">
             <Form.Label>Choose Task</Form.Label>
@@ -445,6 +599,84 @@ function Home() {
                   based on the selected class of business.
                 </Alert>
 
+                {/* Default Scrutiny Items */}
+                <Card className="mb-4">
+                  <Card.Body>
+                    <Form.Group>
+                      <Form.Label><strong>Select Default Focus Areas</strong></Form.Label>
+                      <Form.Text className="text-muted d-block mb-2">
+                        Choose from predefined focus areas or add custom ones below
+                      </Form.Text>
+                      <div className="mb-3">
+                        {DEFAULT_SCRUTINY_ITEMS.map(item => (
+                          <Form.Check
+                            key={item.value}
+                            type="checkbox"
+                            id={`scrutiny-${item.value}`}
+                            label={item.label}
+                            checked={selectedScrutinyItems.includes(item.value)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedScrutinyItems([...selectedScrutinyItems, item.value]);
+                              } else {
+                                setSelectedScrutinyItems(selectedScrutinyItems.filter(i => i !== item.value));
+                              }
+                            }}
+                            className="mb-2"
+                          />
+                        ))}
+                      </div>
+                    </Form.Group>
+                  </Card.Body>
+                </Card>
+
+                {/* Interview Details - Only shown if INTERVIEWS is selected */}
+                {selectedScrutinyItems.includes('INTERVIEWS') && (
+                  <Card className="mb-4 border-primary">
+                    <Card.Body>
+                      <div className="d-flex justify-content-between align-items-center mb-3">
+                        <h5 className="mb-0">Interview Details</h5>
+                        <Button variant="outline-primary" size="sm" onClick={addInterview}>
+                          + Add Interview
+                        </Button>
+                      </div>
+                      {interviewDetails.map(interview => (
+                        <Card key={interview.id} className="mb-3">
+                          <Card.Body>
+                            <Row className="mb-2">
+                              <Col md={6}>
+                                <Form.Control
+                                  placeholder="Interviewee Name"
+                                  value={interview.name}
+                                  onChange={(e) => updateInterview(interview.id, 'name', e.target.value)}
+                                />
+                              </Col>
+                              <Col md={6} className="d-flex align-items-start">
+                                {interviewDetails.length > 1 && (
+                                  <Button 
+                                    variant="outline-danger" 
+                                    size="sm"
+                                    onClick={() => removeInterview(interview.id)}
+                                  >
+                                    Remove
+                                  </Button>
+                                )}
+                              </Col>
+                            </Row>
+                            <Form.Control
+                              as="textarea"
+                              rows={3}
+                              placeholder="Conversation details..."
+                              value={interview.conversation}
+                              onChange={(e) => updateInterview(interview.id, 'conversation', e.target.value)}
+                            />
+                          </Card.Body>
+                        </Card>
+                      ))}
+                    </Card.Body>
+                  </Card>
+                )}
+
                 {/* Custom Prompt Field for Scrutiny Mode */}
                 <Card className="mb-4 border-warning">
                   <Card.Body>
@@ -481,18 +713,22 @@ function Home() {
               {fieldReport && <small className="text-success d-block mt-1">✓ {fieldReport.name}</small>}
             </Form.Group>
 
+            {/* Policy Document - Now optional for all modes */}
+            <Form.Group className="mb-4">
+              <Form.Label>Upload Policy Document (optional)</Form.Label>
+              <Form.Control 
+                type="file" 
+                accept=".docx,.pdf,.txt" 
+                onChange={handleFileChange(setPolicyDocument)} 
+              />
+              <Form.Text className="text-muted">
+                Recommended for better analysis. The AI will read through the policy if provided.
+              </Form.Text>
+              {policyDocument && <small className="text-success d-block mt-1">✓ {policyDocument.name}</small>}
+            </Form.Group>
+
             {selectedMode === 'final' && (
               <>
-                <Form.Group className="mb-4">
-                  <Form.Label>Upload Policy Document (required)</Form.Label>
-                  <Form.Control 
-                    type="file" 
-                    accept=".docx,.pdf,.txt" 
-                    onChange={handleFileChange(setPolicyDocument)} 
-                  />
-                  {policyDocument && <small className="text-success d-block mt-1">✓ {policyDocument.name}</small>}
-                </Form.Group>
-
                 <Form.Group className="mb-4">
                   <Form.Label>Upload Endorsement (optional)</Form.Label>
                   <Form.Control 
@@ -569,7 +805,7 @@ function Home() {
 
             {/* Headlines */}
             <h5 className="mb-3">
-              {selectedMode === 'scrutiny' ? 'Key Focus Areas for Scrutiny' : 'Report Arrangement'}
+              {selectedMode === 'scrutiny' ? 'Custom Focus Areas' : 'Report Arrangement'}
             </h5>
 
             {headlines.map(headline => (
@@ -611,51 +847,71 @@ function Home() {
               + Add Headline
             </Button>
 
-            <Form.Group className="mb-4">
-              <Form.Check
-                type="checkbox"
-                label="Exclude uploaded photos from AI processing"
-                checked={excludePhotosFromAI}
-                onChange={e => setExcludePhotosFromAI(e.target.checked)}
-              />
-            </Form.Group>
-
-            <Form.Group className="mb-4">
-              <Form.Label>Upload Photos / Evidence</Form.Label>
-              <Form.Control
-                type="file"
-                multiple
-                accept="image/*"
-                onChange={handleMultipleFiles(setPhotos)}
-                disabled={excludePhotosFromAI}
-              />
-              {photos.length > 0 && (
-                <div className="mt-2">
-                  <Row>
-                    {photos.map((photo, idx) => (
-                      <Col key={idx} xs={6} md={4} lg={3} className="mb-2">
-                        <div className="position-relative">
-                          <img 
-                            src={URL.createObjectURL(photo)} 
-                            alt={`Evidence ${idx + 1}`}
-                            className="img-thumbnail w-100"
-                            style={{ height: '150px', objectFit: 'cover' }}
-                          />
-                          <Button 
-                            variant="danger" 
-                            size="sm"
-                            className="position-absolute top-0 end-0 m-1"
-                            onClick={removePhoto(idx)}
-                          >
-                            ×
-                          </Button>
-                        </div>
-                      </Col>
-                    ))}
-                  </Row>
+            {/* Photo Uploads with Exclude Option */}
+            <Card className="mb-4">
+              <Card.Body>
+                <div className="d-flex justify-content-between align-items-center mb-3">
+                  <h5 className="mb-0">Upload Photos / Evidence</h5>
+                  <Form.Check
+                    type="switch"
+                    id="exclude-photos-switch"
+                    label="Exclude from AI processing"
+                    checked={excludePhotosFromAI}
+                    onChange={(e) => setExcludePhotosFromAI(e.target.checked)}
+                    className="mb-0"
+                  />
                 </div>
-              )}
-            </Form.Group>
+                
+                <Form.Group>
+                  <Form.Label>Select Photos (optional)</Form.Label>
+                  <Form.Control
+                    type="file"
+                    multiple
+                    accept="image/*"
+                    onChange={handleMultipleFiles(setPhotos)}
+                  />
+                  <Form.Text className="text-muted">
+                    {excludePhotosFromAI 
+                      ? "Photos will be stored but excluded from AI analysis"
+                      : "Photos will be analyzed by AI and included in the report"}
+                  </Form.Text>
+                  
+                  {photos.length > 0 && (
+                    <div className="mt-2">
+                      <Row>
+                        {photos.map((photo, idx) => (
+                          <Col key={idx} xs={6} md={4} lg={3} className="mb-2">
+                            <div className="position-relative">
+                              <img 
+                                src={URL.createObjectURL(photo)} 
+                                alt={`Evidence ${idx + 1}`}
+                                className="img-thumbnail w-100"
+                                style={{ height: '150px', objectFit: 'cover' }}
+                              />
+                              <Button 
+                                variant="danger" 
+                                size="sm"
+                                className="position-absolute top-0 end-0 m-1"
+                                onClick={removePhoto(idx)}
+                              >
+                                ×
+                              </Button>
+                            </div>
+                          </Col>
+                        ))}
+                      </Row>
+                      <div className="mt-2 text-muted">
+                        <small>
+                          {excludePhotosFromAI 
+                            ? "✓ Photos will be stored only (not analyzed by AI)"
+                            : "✓ Photos will be analyzed by AI"}
+                        </small>
+                      </div>
+                    </div>
+                  )}
+                </Form.Group>
+              </Card.Body>
+            </Card>
 
             <div className="text-center mt-4">
               <Button
@@ -692,9 +948,17 @@ function Home() {
               </div>
             </div>
 
-            <pre className="bg-light p-3 rounded" style={{ maxHeight: '500px', overflow: 'auto' }}>
-              {generatedReport}
-            </pre>
+            <div 
+              className="p-3 rounded border"
+              style={{ 
+                maxHeight: '500px', 
+                overflow: 'auto',
+                fontFamily: 'Times New Roman, serif',
+                fontSize: '12pt',
+                lineHeight: '1.5'
+              }}
+              dangerouslySetInnerHTML={{ __html: renderReportWithTable(generatedReport) }}
+            />
           </Card.Body>
         </Card>
       )}
