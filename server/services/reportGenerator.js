@@ -1,342 +1,346 @@
+const docx = require('docx');
 const fs = require('fs/promises');
-const path = require('path');
-const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, HeadingLevel } = require('docx');
 
-async function generateReport(reportText, outputPath, metadata = {}) {
-  try {
-    // Clean the report text - remove HTML tables if present
-    let cleanReportText = reportText;
+async function generateReport(reportText, outputPath, metadata) {
+  const {
+    Document,
+    Packer,
+    Paragraph,
+    TextRun,
+    Table,
+    TableCell,
+    TableRow,
+    WidthType,
+    BorderStyle,
+    AlignmentType,
+  } = docx;
+
+  // Create header table with invisible borders
+  const headerTable = new Table({
+    width: {
+      size: 100,
+      type: WidthType.PERCENTAGE,
+    },
+    borders: {
+      top: { style: BorderStyle.NONE },
+      bottom: { style: BorderStyle.NONE },
+      left: { style: BorderStyle.NONE },
+      right: { style: BorderStyle.NONE },
+      insideHorizontal: { style: BorderStyle.NONE },
+      insideVertical: { style: BorderStyle.NONE },
+    },
+    rows: [
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: 'Claim Number:',
+                    bold: true,
+                    font: 'Times New Roman',
+                    size: 24, // 12pt
+                  }),
+                ],
+                spacing: { line: 360 }, // 1.5 line spacing
+              }),
+            ],
+            width: { size: 30, type: WidthType.PERCENTAGE },
+          }),
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: metadata.claimNumber || 'N/A',
+                    font: 'Times New Roman',
+                    size: 24,
+                  }),
+                ],
+                spacing: { line: 360 },
+              }),
+            ],
+            width: { size: 70, type: WidthType.PERCENTAGE },
+          }),
+        ],
+      }),
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: 'Policy Number:',
+                    bold: true,
+                    font: 'Times New Roman',
+                    size: 24,
+                  }),
+                ],
+                spacing: { line: 360 },
+              }),
+            ],
+          }),
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: metadata.policyNumber || 'N/A',
+                    font: 'Times New Roman',
+                    size: 24,
+                  }),
+                ],
+                spacing: { line: 360 },
+              }),
+            ],
+          }),
+        ],
+      }),
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: 'Insured Name:',
+                    bold: true,
+                    font: 'Times New Roman',
+                    size: 24,
+                  }),
+                ],
+                spacing: { line: 360 },
+              }),
+            ],
+          }),
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: metadata.insuredName || 'N/A',
+                    font: 'Times New Roman',
+                    size: 24,
+                  }),
+                ],
+                spacing: { line: 360 },
+              }),
+            ],
+          }),
+        ],
+      }),
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: 'Date of Loss:',
+                    bold: true,
+                    font: 'Times New Roman',
+                    size: 24,
+                  }),
+                ],
+                spacing: { line: 360 },
+              }),
+            ],
+          }),
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: metadata.dateOfLoss || 'N/A',
+                    font: 'Times New Roman',
+                    size: 24,
+                  }),
+                ],
+                spacing: { line: 360 },
+              }),
+            ],
+          }),
+        ],
+      }),
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: 'Location of Loss:',
+                    bold: true,
+                    font: 'Times New Roman',
+                    size: 24,
+                  }),
+                ],
+                spacing: { line: 360 },
+              }),
+            ],
+          }),
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: metadata.locationOfLoss || 'N/A',
+                    font: 'Times New Roman',
+                    size: 24,
+                  }),
+                ],
+                spacing: { line: 360 },
+              }),
+            ],
+          }),
+        ],
+      }),
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: 'Class of Business:',
+                    bold: true,
+                    font: 'Times New Roman',
+                    size: 24,
+                  }),
+                ],
+                spacing: { line: 360 },
+              }),
+            ],
+          }),
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: metadata.classOfBusiness || 'N/A',
+                    font: 'Times New Roman',
+                    size: 24,
+                  }),
+                ],
+                spacing: { line: 360 },
+              }),
+            ],
+          }),
+        ],
+      }),
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: 'Report Type:',
+                    bold: true,
+                    font: 'Times New Roman',
+                    size: 24,
+                  }),
+                ],
+                spacing: { line: 360 },
+              }),
+            ],
+          }),
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: (metadata.reportType || 'Unknown').toUpperCase(),
+                    font: 'Times New Roman',
+                    size: 24,
+                  }),
+                ],
+                spacing: { line: 360 },
+              }),
+            ],
+          }),
+        ],
+      }),
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: 'Generated:',
+                    bold: true,
+                    font: 'Times New Roman',
+                    size: 24,
+                  }),
+                ],
+                spacing: { line: 360 },
+              }),
+            ],
+          }),
+          new TableCell({
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: new Date(metadata.generatedAt).toLocaleString(),
+                    font: 'Times New Roman',
+                    size: 24,
+                  }),
+                ],
+                spacing: { line: 360 },
+              }),
+            ],
+          }),
+        ],
+      }),
+    ],
+  });
+
+  // Convert report text to paragraphs
+  const reportParagraphs = reportText.split('\n').map(line => {
+    // Check if line is a heading (simple heuristic)
+    const isHeading = line.match(/^[A-Z\s]+:/) || line.match(/^#+\s/) || 
+                      (line.trim().length > 0 && line === line.toUpperCase() && line.length < 100);
     
-    // Remove HTML table if present
-    const tableStart = cleanReportText.indexOf('<table');
-    const tableEnd = cleanReportText.indexOf('</table>');
-    if (tableStart !== -1 && tableEnd !== -1) {
-      cleanReportText = cleanReportText.substring(tableEnd + 8); // Remove table and start with content after
-    }
-    
-    // Remove any HTML tags
-    cleanReportText = cleanReportText.replace(/<[^>]*>/g, '');
-    
-    // Create document with Times New Roman formatting
-    const doc = new Document({
-      styles: {
-        paragraphStyles: [
-          {
-            id: 'Normal',
-            name: 'Normal',
-            basedOn: 'Normal',
-            next: 'Normal',
-            run: {
-              font: 'Times New Roman',
-              size: 24, // 12pt in half-points
-            },
-            paragraph: {
-              spacing: { line: 360 }, // 1.5 line spacing (240 = single)
-              alignment: 'both',
-            },
-          },
-          {
-            id: 'Heading1',
-            name: 'Heading 1',
-            basedOn: 'Normal',
-            next: 'Normal',
-            run: {
-              font: 'Times New Roman',
-              size: 32, // 16pt
-              bold: true,
-            },
-            paragraph: {
-              spacing: { before: 480, after: 240 },
-            },
-          },
-          {
-            id: 'Heading2',
-            name: 'Heading 2',
-            basedOn: 'Normal',
-            next: 'Normal',
-            run: {
-              font: 'Times New Roman',
-              size: 28, // 14pt
-              bold: true,
-            },
-            paragraph: {
-              spacing: { before: 360, after: 180 },
-            },
-          },
+    return new Paragraph({
+      children: [
+        new TextRun({
+          text: line || ' ', // Empty line for spacing
+          font: 'Times New Roman',
+          size: 24, // 12pt (half-points)
+          bold: isHeading,
+        }),
+      ],
+      spacing: {
+        line: 360, // 1.5 line spacing (240 = single, 360 = 1.5, 480 = double)
+        after: line.trim() === '' ? 240 : 0, // Extra space after empty lines
+      },
+    });
+  });
+
+  // Create document
+  const doc = new Document({
+    sections: [
+      {
+        properties: {},
+        children: [
+          headerTable,
+          new Paragraph({
+            text: '', // Spacing after table
+            spacing: { after: 400 },
+          }),
+          ...reportParagraphs,
         ],
       },
-      sections: [{
-        properties: {
-          page: {
-            margin: {
-              top: 1440,    // 1 inch
-              right: 1440,
-              bottom: 1440,
-              left: 1440,
-            }
-          }
-        },
-        children: [
-          // Title
-          new Paragraph({
-            text: `${metadata.reportType ? metadata.reportType.toUpperCase() + ' CLAIMS ADJUSTMENT REPORT' : 'CLAIMS ADJUSTMENT REPORT'}`,
-            heading: HeadingLevel.TITLE,
-            alignment: 'center',
-            spacing: { after: 480 },
-          }),
-          
-          // Metadata Table
-          createMetadataTable(metadata),
-          
-          // Empty paragraph for spacing
-          new Paragraph({
-            text: '',
-            spacing: { after: 240 },
-          }),
-          
-          // Main Report Content
-          ...createReportParagraphs(cleanReportText),
-          
-          // Footer with generation info
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: `\n\nGenerated by: ${metadata.aiAgent || 'AI Agent'} | Date: ${new Date(metadata.generatedAt).toLocaleDateString()} | Class: ${metadata.classOfBusiness || 'Not specified'}`,
-                size: 20,
-                color: '666666',
-                italics: true,
-              })
-            ],
-            alignment: 'center',
-            spacing: { before: 480 },
-          }),
-        ]
-      }]
-    });
-
-    // Save to file
-    const buffer = await Packer.toBuffer(doc);
-    await fs.writeFile(outputPath, buffer);
-    
-    console.log(`Report generated: ${outputPath}`);
-    return outputPath;
-    
-  } catch (error) {
-    console.error('Error generating DOCX report:', error);
-    throw error;
-  }
-}
-
-function createMetadataTable(metadata) {
-  // Create invisible borders
-  const noBorder = {
-    style: BorderStyle.NONE,
-    size: 0,
-    color: 'FFFFFF'
-  };
-
-  const rows = [
-    new TableRow({
-      children: [
-        new TableCell({
-          children: [new Paragraph({ children: [new TextRun({ text: 'Claim Number:', bold: true, font: 'Times New Roman', size: 24 })] })],
-          borders: { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder },
-          width: { size: 25, type: WidthType.PERCENTAGE },
-        }),
-        new TableCell({
-          children: [new Paragraph({ children: [new TextRun({ text: metadata.claimNumber || 'Not provided', font: 'Times New Roman', size: 24 })] })],
-          borders: { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder },
-          width: { size: 25, type: WidthType.PERCENTAGE },
-        }),
-        new TableCell({
-          children: [new Paragraph({ children: [new TextRun({ text: 'Policy Number:', bold: true, font: 'Times New Roman', size: 24 })] })],
-          borders: { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder },
-          width: { size: 25, type: WidthType.PERCENTAGE },
-        }),
-        new TableCell({
-          children: [new Paragraph({ children: [new TextRun({ text: metadata.policyNumber || 'Not provided', font: 'Times New Roman', size: 24 })] })],
-          borders: { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder },
-          width: { size: 25, type: WidthType.PERCENTAGE },
-        }),
-      ],
-    }),
-    new TableRow({
-      children: [
-        new TableCell({
-          children: [new Paragraph({ children: [new TextRun({ text: 'Insured Name:', bold: true, font: 'Times New Roman', size: 24 })] })],
-          borders: { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder },
-        }),
-        new TableCell({
-          children: [new Paragraph({ children: [new TextRun({ text: metadata.insuredName || 'Not provided', font: 'Times New Roman', size: 24 })] })],
-          borders: { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder },
-        }),
-        new TableCell({
-          children: [new Paragraph({ children: [new TextRun({ text: 'Date of Loss:', bold: true, font: 'Times New Roman', size: 24 })] })],
-          borders: { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder },
-        }),
-        new TableCell({
-          children: [new Paragraph({ children: [new TextRun({ text: metadata.dateOfLoss || 'Not provided', font: 'Times New Roman', size: 24 })] })],
-          borders: { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder },
-        }),
-      ],
-    }),
-    new TableRow({
-      children: [
-        new TableCell({
-          children: [new Paragraph({ children: [new TextRun({ text: 'Location of Loss:', bold: true, font: 'Times New Roman', size: 24 })] })],
-          borders: { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder },
-        }),
-        new TableCell({
-          children: [new Paragraph({ children: [new TextRun({ text: metadata.locationOfLoss || 'Not provided', font: 'Times New Roman', size: 24 })] })],
-          borders: { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder },
-        }),
-        new TableCell({
-          children: [new Paragraph({ children: [new TextRun({ text: 'Class of Business:', bold: true, font: 'Times New Roman', size: 24 })] })],
-          borders: { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder },
-        }),
-        new TableCell({
-          children: [new Paragraph({ children: [new TextRun({ text: metadata.classOfBusiness || 'Not provided', font: 'Times New Roman', size: 24 })] })],
-          borders: { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder },
-        }),
-      ],
-    }),
-  ];
-
-  return new Table({
-    rows: rows,
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    margins: { top: 100, bottom: 100, left: 100, right: 100 },
+    ],
   });
+
+  // Write to file
+  const buffer = await Packer.toBuffer(doc);
+  await fs.writeFile(outputPath, buffer);
 }
 
-function createReportParagraphs(reportText) {
-  const paragraphs = [];
-  
-  // Split into lines
-  const lines = reportText.split('\n');
-  let currentParagraph = '';
-  
-  for (const line of lines) {
-    const trimmedLine = line.trim();
-    
-    if (!trimmedLine) {
-      // Empty line - end current paragraph if there is one
-      if (currentParagraph) {
-        paragraphs.push(
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: currentParagraph,
-                font: 'Times New Roman',
-                size: 24,
-              })
-            ],
-            spacing: { line: 360 },
-            alignment: 'both',
-          })
-        );
-        currentParagraph = '';
-      }
-      // Add empty paragraph for spacing
-      paragraphs.push(new Paragraph({ text: '' }));
-    } else if (trimmedLine.match(/^[A-Z][A-Z\s\-\&]+:$/) || trimmedLine.match(/^[A-Z][A-Z\s\-\&]+\s+ANALYSIS:$/)) {
-      // Heading - end current paragraph and start new heading
-      if (currentParagraph) {
-        paragraphs.push(
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: currentParagraph,
-                font: 'Times New Roman',
-                size: 24,
-              })
-            ],
-            spacing: { line: 360 },
-            alignment: 'both',
-          })
-        );
-        currentParagraph = '';
-      }
-      
-      // Add heading
-      paragraphs.push(
-        new Paragraph({
-          text: trimmedLine.replace(/:$/, ''),
-          heading: trimmedLine.match(/^[A-Z][A-Z\s\-\&]+ ANALYSIS:$/) ? HeadingLevel.HEADING_1 : HeadingLevel.HEADING_2,
-          spacing: { before: 240, after: 120 },
-        })
-      );
-    } else if (trimmedLine.length > 100) {
-      // Long line - likely part of a paragraph
-      currentParagraph += (currentParagraph ? ' ' : '') + trimmedLine;
-    } else {
-      // Short line - could be a heading or part of a list
-      if (currentParagraph) {
-        // End current paragraph
-        paragraphs.push(
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: currentParagraph,
-                font: 'Times New Roman',
-                size: 24,
-              })
-            ],
-            spacing: { line: 360 },
-            alignment: 'both',
-          })
-        );
-        currentParagraph = '';
-      }
-      
-      // Check if it's a section heading
-      if (trimmedLine.match(/^[0-9]+\.\s+[A-Z]/) || trimmedLine.match(/^[A-Z]/) && trimmedLine.length < 80) {
-        paragraphs.push(
-          new Paragraph({
-            text: trimmedLine,
-            heading: HeadingLevel.HEADING_2,
-            spacing: { before: 180, after: 90 },
-          })
-        );
-      } else {
-        // Regular line
-        paragraphs.push(
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: trimmedLine,
-                font: 'Times New Roman',
-                size: 24,
-              })
-            ],
-            spacing: { line: 360 },
-            alignment: 'both',
-          })
-        );
-      }
-    }
-  }
-  
-  // Add any remaining text
-  if (currentParagraph) {
-    paragraphs.push(
-      new Paragraph({
-        children: [
-          new TextRun({
-            text: currentParagraph,
-            font: 'Times New Roman',
-            size: 24,
-          })
-        ],
-        spacing: { line: 360 },
-        alignment: 'both',
-      })
-    );
-  }
-  
-  return paragraphs;
-}
-
-module.exports = {
-  generateReport
-};
+module.exports = { generateReport };
