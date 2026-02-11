@@ -3,6 +3,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs/promises');
 const fsSynch = require('fs');
+const { v4: uuidv4 } = require('uuid');
 const llmService = require('../services/llmService.js');
 const reportGenerator = require('../services/reportGenerator.js');
 
@@ -35,6 +36,10 @@ const cpUpload = upload.fields([
   { name: 'endorsement', maxCount: 1 },
   { name: 'additionalDocs', maxCount: 12 },
   { name: 'photos', maxCount: 30 },
+]);
+
+const trainingUpload = upload.fields([
+  { name: 'trainingReports', maxCount: 20 }
 ]);
 
 const AI_MODELS = {
@@ -72,6 +77,197 @@ const MAX_TOKENS_CONFIG = {
   final: 8800
 };
 
+// In-memory storage for training reports (use database in production)
+let trainingReportsDB = [];
+
+// Helper function to load training reports metadata from file
+async function loadTrainingReportsDB() {
+  try {
+    const dbPath = path.join(process.cwd(), 'uploads', 'training', 'metadata.json');
+    const data = await fs.readFile(dbPath, 'utf-8');
+    trainingReportsDB = JSON.parse(data);
+  } catch (err) {
+    console.log('No existing training reports database found, starting fresh');
+    trainingReportsDB = [];
+  }
+}
+
+// Helper function to save training reports metadata to file
+async function saveTrainingReportsDB() {
+  try {
+    const trainingDir = path.join(process.cwd(), 'uploads', 'training');
+    await fs.mkdir(trainingDir, { recursive: true });
+    const dbPath = path.join(trainingDir, 'metadata.json');
+    await fs.writeFile(dbPath, JSON.stringify(trainingReportsDB, null, 2));
+  } catch (err) {
+    console.error('Error saving training reports database:', err);
+  }
+}
+
+// Load training reports on startup
+loadTrainingReportsDB();
+
+// ────────────────────────────────────────────────
+// Upload training reports
+// ────────────────────────────────────────────────
+router.post('/upload-training', trainingUpload, async (req, res) => {
+  try {
+    const { metadata } = req.body;
+    
+    if (!req.files?.trainingReports || req.files.trainingReports.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No training reports uploaded'
+      });
+    }
+
+    const parsedMetadata = JSON.parse(metadata);
+    
+    if (!parsedMetadata.reportType || !parsedMetadata.classOfBusiness) {
+      return res.status(400).json({
+        success: false,
+        message: 'Report type and class of business are required'
+      });
+    }
+
+    // Create training directory
+    const trainingDir = path.join(process.cwd(), 'uploads', 'training', 'reports');
+    await fs.mkdir(trainingDir, { recursive: true });
+
+    // Process each uploaded file
+    const uploadedReports = [];
+    
+    for (const file of req.files.trainingReports) {
+      const reportId = uuidv4();
+      const ext = path.extname(file.originalname);
+      const newFilename = `${reportId}${ext}`;
+      const newPath = path.join(trainingDir, newFilename);
+      
+      // Move file to training directory
+      await fs.rename(file.path, newPath);
+      
+      // Extract text content for training
+      const textContent = await llmService.extractTextFromFile(newPath);
+      
+      const reportRecord = {
+        id: reportId,
+        filename: file.originalname,
+        storedFilename: newFilename,
+        path: newPath,
+        reportType: parsedMetadata.reportType,
+        classOfBusiness: parsedMetadata.classOfBusiness,
+        description: parsedMetadata.description || '',
+        author: parsedMetadata.author || '',
+        yearWritten: parsedMetadata.yearWritten || new Date().getFullYear(),
+        uploadedAt: new Date().toISOString(),
+        textContent: textContent.substring(0, 50000), // Store first 50k chars
+        fileSize: file.size
+      };
+      
+      trainingReportsDB.push(reportRecord);
+      uploadedReports.push(reportRecord);
+    }
+    
+    // Save updated database
+    await saveTrainingReportsDB();
+    
+    res.json({
+      success: true,
+      message: `Successfully uploaded ${uploadedReports.length} training report(s)`,
+      reports: uploadedReports.map(r => ({
+        id: r.id,
+        filename: r.filename,
+        reportType: r.reportType,
+        classOfBusiness: r.classOfBusiness
+      }))
+    });
+    
+  } catch (err) {
+    console.error('Error uploading training reports:', err);
+    res.status(500).json({
+      success: false,
+      message: err.message || 'Failed to upload training reports'
+    });
+  }
+});
+
+// ────────────────────────────────────────────────
+// Get all training reports
+// ────────────────────────────────────────────────
+router.get('/training-reports', async (req, res) => {
+  try {
+    // Return metadata only (not full text content)
+    const reports = trainingReportsDB.map(r => ({
+      id: r.id,
+      filename: r.filename,
+      reportType: r.reportType,
+      classOfBusiness: r.classOfBusiness,
+      description: r.description,
+      author: r.author,
+      yearWritten: r.yearWritten,
+      uploadedAt: r.uploadedAt,
+      fileSize: r.fileSize
+    }));
+    
+    res.json({
+      success: true,
+      reports: reports
+    });
+  } catch (err) {
+    console.error('Error fetching training reports:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch training reports'
+    });
+  }
+});
+
+// ────────────────────────────────────────────────
+// Delete a training report
+// ────────────────────────────────────────────────
+router.delete('/training-reports/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const reportIndex = trainingReportsDB.findIndex(r => r.id === id);
+    
+    if (reportIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        message: 'Training report not found'
+      });
+    }
+    
+    const report = trainingReportsDB[reportIndex];
+    
+    // Delete the file
+    try {
+      await fs.unlink(report.path);
+    } catch (err) {
+      console.warn('Could not delete file:', err);
+    }
+    
+    // Remove from database
+    trainingReportsDB.splice(reportIndex, 1);
+    await saveTrainingReportsDB();
+    
+    res.json({
+      success: true,
+      message: 'Training report deleted successfully'
+    });
+    
+  } catch (err) {
+    console.error('Error deleting training report:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete training report'
+    });
+  }
+});
+
+// ────────────────────────────────────────────────
+// Process files and generate report (with training support)
+// ────────────────────────────────────────────────
 router.post('/process-files', cpUpload, async (req, res) => {
   try {
     const {
@@ -88,6 +284,7 @@ router.post('/process-files', cpUpload, async (req, res) => {
       excludePhotosFromAI = 'false',
       customScrutinyPrompt = '',
       interviews = '[]',
+      useTraining = 'true', // NEW: whether to use training reports
     } = req.body;
 
     if (!reportType || !classOfBusiness || !aiAgent) {
@@ -125,6 +322,17 @@ router.post('/process-files', cpUpload, async (req, res) => {
       });
     }
 
+    // Find relevant training reports
+    let trainingExamples = [];
+    if (useTraining === 'true') {
+      trainingExamples = trainingReportsDB.filter(r => 
+        r.classOfBusiness === classOfBusiness && 
+        r.reportType === reportType
+      );
+      
+      console.log(`Found ${trainingExamples.length} training examples for ${classOfBusiness} ${reportType}`);
+    }
+
     const metadata = {
       reportType,
       classOfBusiness,
@@ -139,6 +347,7 @@ router.post('/process-files', cpUpload, async (req, res) => {
       excludePhotos: excludePhotosFromAI === 'true',
       customPrompt: customScrutinyPrompt.trim(),
       interviews: JSON.parse(interviews),
+      trainingExamples: trainingExamples, // Pass training examples to prompt builder
     };
 
     let promptFn;
@@ -182,6 +391,9 @@ router.post('/process-files', cpUpload, async (req, res) => {
       : (req.files.photos || []).map(f => f.path);
 
     console.log(`Processing ${reportType} report using ${aiAgent} (${model})`);
+    if (trainingExamples.length > 0) {
+      console.log(`Using ${trainingExamples.length} training examples`);
+    }
 
     const llmResult = await llmService.callLLM({
       agent: aiAgent,
@@ -202,6 +414,8 @@ router.post('/process-files', cpUpload, async (req, res) => {
         model,
         reportType,
         claimNumber: metadata.claimNumber,
+        trainingUsed: trainingExamples.length > 0,
+        trainingExamplesCount: trainingExamples.length,
         generatedAt: new Date().toISOString()
       }
     });
@@ -216,6 +430,9 @@ router.post('/process-files', cpUpload, async (req, res) => {
   }
 });
 
+// ────────────────────────────────────────────────
+// Export report as DOCX
+// ────────────────────────────────────────────────
 router.post('/export/docx', async (req, res) => {
   try {
     const { reportText, metadata } = req.body;
