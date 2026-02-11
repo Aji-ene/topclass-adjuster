@@ -273,11 +273,11 @@ function buildScrutinyPrompt(metadata) {
       
       // Handle special focus areas
       if (mainHeadline.includes('THE INSURED')) {
-        focus += `\n\n${h.main}:\nConduct an online search for "${metadata.insuredName}" and write a comprehensive 3-paragraph background covering the company's history, operations, industry standing, and any relevant business activities. Use reported speech (past tense) and write in essay format, not bullet points.`;
+        focus += `\n\n${h.main}:\nConduct an online search for "${metadata.insuredName}" and write a comprehensive 3-paragraph background covering the company's history, operations, industry standing, and any relevant business activities. Use reported speech (past tense) and write in essay format, not bullet points. If it's an individual use the best method`;
       } else if (mainHeadline.includes('POLICY TERMS') || mainHeadline.includes('POLICY CONDITIONS')) {
-        focus += `\n\n${h.main}:\nCarefully review the Policy Document and any Endorsements provided. First, list all applicable Memos, Clauses, Warranties, Conditions, and Exclusions that are RELEVANT to this specific claim. Then, separately list those that are NOT relevant to this claim. Write in reported speech and essay format.`;
+        focus += `\n\n${h.main}:\nCarefully review the Policy Document and any Endorsements provided. First, in sub headers/points,  list all applicable Memos, Clauses, Warranties, Conditions, and Exclusions that are RELEVANT to this specific claim and briefly explain each of them. Then, also in sub headers/points, separately list those that are NOT relevant to this claim, with no explanation.`;
       } else if (mainHeadline.includes('INTERVIEW')) {
-        focus += `\n\n${h.main}:\nDocument the interviews conducted. For each person interviewed, state their name, position, and a comprehensive summary of the conversation in reported speech (past tense). Write in paragraph form, not bullet points.`;
+        focus += `\n\n${h.main}:\nDocument the interviews conducted. For each person interviewed, state their name, position, and a comprehensive summary of the conversation in reported speech (past tense). Write in essay form, not bullet points.`;
         
         // Add interview data if provided
         if (metadata.interviews && metadata.interviews.length > 0) {
