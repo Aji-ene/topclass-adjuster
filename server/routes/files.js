@@ -67,7 +67,7 @@ const TEMPERATURE_CONFIG = {
 };
 
 const MAX_TOKENS_CONFIG = {
-  scrutiny: 7200,
+  scrutiny: 10000,
   interim: 6000,
   final: 8800
 };
