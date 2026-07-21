@@ -1,284 +1,752 @@
-// services/aiService.js
-const { OpenAI } = require('openai');
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const fs = require('fs/promises');
+const path = require('path');
+const Anthropic = require('@anthropic-ai/sdk');
+const OpenAI = require('openai');
+const sessionStore = require('./sessionStore');
 
-exports.analyzeInterim = async (questionnaireContent, analyzedContent) => {
-  try {
-    const prompt = `
-      You are an expert insurance claims assistant. Use the following Analyzed File content as the structure and order for your report. Extract details from the Questionnaire File to populate the report.
-      
-      ANALYZED FILE (structure and order):
-      ${analyzedContent.slice(0, 1000)}
-      
-      QUESTIONNAIRE FILE (details):
-      ${questionnaireContent.slice(0, 1000)}
-      
-      Return JSON with:
-      - OVERVIEW (string, max 500 words, inferred from Questionnaire)
-      - "1.0 FACTS OF THE LOSS" (string, max 500 words, based on Questionnaire, ordered by Analyzed)
-      - "2.0 PROXIMATE CAUSE OF THE LOSS" (string, max 100 words, based on Questionnaire, ordered by Analyzed)
-      - "3.0 PHOTOGRAPHS" (string, max 50 words, based on Questionnaire, ordered by Analyzed)
-      - "4.0 OUR UPDATE ON THE CLAIM" (string, max 350 words, based on Questionnaire, ordered by Analyzed)
-      - "5.0 EXTENT OF THE LOSS" (string, max 100 words, based on Questionnaire, ordered by Analyzed)
-      - "6.0 SALVAGEABLE" (string, max 50 words, based on Questionnaire, ordered by Analyzed)
-      - "7.0 FURTHER REQUIREMENTS FROM INSURERS" (string, max 100 words, based on Questionnaire, ordered by Analyzed)
-      - "8.0 FURTHER REQUIREMENTS FROM THE INSURED" (string, max 200 words, based on Questionnaire, ordered by Analyzed)
-      - "9.0 RESERVE" (string, max 50 words, based on Questionnaire, ordered by Analyzed)
-      Where possible, match topics or sections from the Analyzed File and fill with Questionnaire details.
-    `;
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: "You are an expert insurance claims assistant." },
-        { role: "user", content: prompt }
-      ],
-      temperature: 0.2,
-      max_tokens: 1000,
-      response_format: { type: "json_object" }
-    });
-    const content = response.choices[0].message.content;
-    console.log('Interim Raw Response:', content);
-    const parsed = JSON.parse(content);
-    return {
-      OVERVIEW: parsed.OVERVIEW || "No overview provided",
-      "1.0 FACTS OF THE LOSS": parsed["1.0 FACTS OF THE LOSS"] || "No facts provided",
-      "2.0 PROXIMATE CAUSE OF THE LOSS": parsed["2.0 PROXIMATE CAUSE OF THE LOSS"] || "Cause unknown",
-      "3.0 PHOTOGRAPHS": parsed["3.0 PHOTOGRAPHS"] || "No photographs available",
-      "4.0 OUR UPDATE ON THE CLAIM": parsed["4.0 OUR UPDATE ON THE CLAIM"] || "No update available",
-      "5.0 EXTENT OF THE LOSS": parsed["5.0 EXTENT OF THE LOSS"] || "Extent not determined",
-      "6.0 SALVAGEABLE": parsed["6.0 SALVAGEABLE"] || "Salvageability unknown",
-      "7.0 FURTHER REQUIREMENTS FROM INSURERS": parsed["7.0 FURTHER REQUIREMENTS FROM INSURERS"] || "No requirements specified",
-      "8.0 FURTHER REQUIREMENTS FROM THE INSURED": parsed["8.0 FURTHER REQUIREMENTS FROM THE INSURED"] || "No requirements specified",
-      "9.0 RESERVE": parsed["9.0 RESERVE"] || "Reserve not set"
-    };
-  } catch (error) {
-    console.error('Interim AI Error:', error.message);
-    return {
-      OVERVIEW: "Interim analysis failed",
-      "1.0 FACTS OF THE LOSS": "Analysis failed",
-      "2.0 PROXIMATE CAUSE OF THE LOSS": "Cause unknown",
-      "3.0 PHOTOGRAPHS": "No photographs available",
-      "4.0 OUR UPDATE ON THE CLAIM": "No update available",
-      "5.0 EXTENT OF THE LOSS": "Extent not determined",
-      "6.0 SALVAGEABLE": "Salvageability unknown",
-      "7.0 FURTHER REQUIREMENTS FROM INSURERS": "No requirements specified",
-      "8.0 FURTHER REQUIREMENTS FROM THE INSURED": "No requirements specified",
-      "9.0 RESERVE": "Reserve not set"
-    };
-  }
-};
+// ---------------------------------------------------------------
+// Helper: read text from common insurance/claims file types
+// ---------------------------------------------------------------
+async function extractTextFromFile(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
 
-exports.analyzeFull = async (questionnaireContent, analyzedContent) => {
   try {
-    const prompt = `
-      You are an expert insurance claims adjuster. Use the following structure for your report, ordering it as listed below. Extract details from the Questionnaire File to populate each section, assuming the role of an insurance claims adjuster expert. The Analyzed File is provided for reference but does not dictate the structure—use the predefined sections below.
-      
-      ANALYZED FILE (reference only):
-      ${analyzedContent.slice(0, 1000)}
-      
-      QUESTIONNAIRE FILE (details):
-      ${questionnaireContent.slice(0, 1000)}
-      
-      Return JSON with these sections, populated with details from the Questionnaire:
-      - "PREFACE" (string, max 200 words)
-      - "1.0 THE INSURED" (string, max 100 words)
-      - "2.0 FACTS OF THE ACCIDENT" (string, max 500 words)
-      - "3.0 PROXIMATE CAUSE OF LOSS" (string, max 100 words)
-      - "4.0 INTERVIEWS" (string, max 200 words)
-      - "4.1 Replace with name" (string, max 100 words)
-      - "4.2 Replace with name" (string, max 100 words)
-      - "5.0 MOTOR VEHICLE PARTICULARS" (string, max 200 words)
-      - "6.0 DRIVER’S LICENSE" (string, max 100 words)
-      - "7.0 POLICY TERMS AND CONDITIONS" (string, max 200 words)
-      - "7.1 Scope of Cover" (string, max 100 words)
-      - "7.2 Notification of Claim" (string, max 100 words)
-      - "7.3 Period of Cover" (string, max 100 words)
-      - "7.4 MEMO 2: JURISDICTION CLAUSE" (string, max 100 words)
-      - "7.5 MEMO 5: AUTOMATIC REINSTATEMENT OF SUM INSURED AFTER LOSS CLAUSE" (string, max 100 words)
-      - "7.6 MEMO 6: DOCUMENTARY EVIDENCE WARRANTY" (string, max 100 words)
-      - "7.7 MEMO 8: EXCESS CLAUSE" (string, max 100 words)
-      - "7.8 MEMO 14: MAINTENANCE WARRANTY" (string, max 100 words)
-      - "7.9 MEMO 15: WAY BILL CLAUSE" (string, max 100 words)
-      - "7.10 MEMO 18: HIRED VEHICLE WARRANTY" (string, max 100 words)
-      - "7.11 MEMO 6: ARBITRATION CLAUSE" (string, max 100 words)
-      - "7.12 MEMO 7: LOADING AND UNLOADING EXTENSION CLAUSE" (string, max 100 words)
-      - "7.13 MEMO 9: DISAPPEARANCE OF CONVEYANCE CLAUSE" (string, max 100 words)
-      - "7.14 MEMO 10: AUTOMATIC REINSTATEMENT OF SUM INSURED AFTER LOSS CLAUSE" (string, max 100 words)
-      - "7.15 MEMO 11: POLITICAL RISKS EXCLUSION CLAUSE" (string, max 100 words)
-      - "7.16 MEMO 12: COLLUSION CLAUSE" (string, max 100 words)
-      - "7.17 MEMO 13: CARE AND PROTECTION CLAUSE" (string, max 100 words)
-      - "7.18 MEMO 14: DISHONESTY OF DRIVERS’ CLAUSE" (string, max 100 words)
-      - "7.19 MEMO 15: RECORD OF GOODS WARRANTY" (string, max 100 words)
-      - "7.20 MEMO 16: VEHICLE LOAD CLAUSE" (string, max 100 words)
-      - "7.21 MEMO 17: TARPAULIN WARRANTY (APPLICABLE TO VEHICLE WITH OPEN BODY)" (string, max 100 words)
-      - "7.22 MEMO 18: CONTAINERIZED VEHICLES CLAUSE" (string, max 100 words)
-      - "7.23 MEMO 19: HIRED VEHICLE WARRANTY" (string, max 100 words)
-      - "7.24 MEMO 20: PRECAUTIONS AND PROTECTIONS" (string, max 100 words)
-      - "7.25 MEMO 21: UNATTENDED VEHICLE WARRANTY" (string, max 100 words)
-      - "7.26 MEMO 22: INHERENT VICE OF THE SUBJECT MATTER" (string, max 100 words)
-      - "7.27 MEMO 23: EXCLUSION OF DELICATE GOODS" (string, max 100 words)
-      - "7.28 MEMO 24: TERRORISM EXCLUSION CLAUSE" (string, max 100 words)
-      - "7.29 MEMO 25: ALTERNATIVE DISPUTE RESOLUTION CLAUSE" (string, max 100 words)
-      - "7.30 MEMO 26: CLAIMS/LOSS RATIO WARRANTY" (string, max 100 words)
-      - "7.31 MEMO 27: SALVAGE RETRIEVAL CLAUSE" (string, max 100 words)
-      - "7.32 MEMO 28: PREMIUM PAYMENT DEFERRAL CLAUSE" (string, max 100 words)
-      - "7.33 MEMO 29: RIOT, STRIKES & CIVIL COMMOTION" (string, max 100 words)
-      - "7.34 MEMO 30: CLAIM NOTIFICATION AND DOCUMENTATION WARRANTY" (string, max 100 words)
-      - "7.35 MEMO 31: NO PREMIUM NO COVER WARRANTY" (string, max 100 words)
-      - "7.36 Photographs" (string, max 50 words)
-      - "7.37 Adequacy of the Limit Per carrying" (string, max 100 words)
-      - "7.38 Other Insurances" (string, max 100 words)
-      - "7.39 Breach of Policy Terms" (string, max 200 words)
-      - "7.40 SALVAGE" (string, max 50 words)
-      - "8.0 THE INSURED’S CLAIM" (string, max 300 words)
-      - "9.0 OUR VERIFICATION OF THE LOSS" (string, max 300 words)
-      - "10.0 CONSIDERATION OF LIABILITY" (string, max 200 words)
-      - "11.0 ADJUSTMENT" (string, max 200 words)
-      - "12.0 RISK IMPROVEMENT" (string, max 100 words)
-      - "13.0 DISCHARGE OF CLAIM" (string, max 100 words)
-      - "14.0 LOSS ADJUSTERS’ FEES AND EXPENSES" (string, max 100 words)
-      - "15.0 SUMMARY OF ADJUSTMENT AND ADJUSTER’S BILL" (string, max 200 words)
-      - "16.0 METHOD OF SETTLEMENT" (string, max 100 words)
-      - "17.0 ATTACHMENT TO THE FINAL REPORT" (string, max 100 words)
-    `;
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: "You are an expert insurance claims adjuster." },
-        { role: "user", content: prompt }
-      ],
-      temperature: 0.2,
-      max_tokens: 2500, // Increased to fit all sections (~4,000 words max)
-      response_format: { type: "json_object" }
-    });
-    const content = response.choices[0].message.content;
-    console.log('Full Raw Response:', content);
-    const parsed = JSON.parse(content);
-    return {
-      "PREFACE": parsed["PREFACE"] || "No preface provided",
-      "1.0 THE INSURED": parsed["1.0 THE INSURED"] || "Insured details unavailable",
-      "2.0 FACTS OF THE ACCIDENT": parsed["2.0 FACTS OF THE ACCIDENT"] || "No facts provided",
-      "3.0 PROXIMATE CAUSE OF LOSS": parsed["3.0 PROXIMATE CAUSE OF LOSS"] || "Cause unknown",
-      "4.0 INTERVIEWS": parsed["4.0 INTERVIEWS"] || "No interviews conducted",
-      "4.1 Replace with name": parsed["4.1 Replace with name"] || "No interview details",
-      "4.2 Replace with name": parsed["4.2 Replace with name"] || "No interview details",
-      "5.0 MOTOR VEHICLE PARTICULARS": parsed["5.0 MOTOR VEHICLE PARTICULARS"] || "Vehicle details unavailable",
-      "6.0 DRIVER’S LICENSE": parsed["6.0 DRIVER’S LICENSE"] || "License details unavailable",
-      "7.0 POLICY TERMS AND CONDITIONS": parsed["7.0 POLICY TERMS AND CONDITIONS"] || "Terms not specified",
-      "7.1 Scope of Cover": parsed["7.1 Scope of Cover"] || "Scope not defined",
-      "7.2 Notification of Claim": parsed["7.2 Notification of Claim"] || "Notification not recorded",
-      "7.3 Period of Cover": parsed["7.3 Period of Cover"] || "Period not specified",
-      "7.4 MEMO 2: JURISDICTION CLAUSE": parsed["7.4 MEMO 2: JURISDICTION CLAUSE"] || "Jurisdiction not noted",
-      "7.5 MEMO 5: AUTOMATIC REINSTATEMENT OF SUM INSURED AFTER LOSS CLAUSE": parsed["7.5 MEMO 5: AUTOMATIC REINSTATEMENT OF SUM INSURED AFTER LOSS CLAUSE"] || "Reinstatement not applicable",
-      "7.6 MEMO 6: DOCUMENTARY EVIDENCE WARRANTY": parsed["7.6 MEMO 6: DOCUMENTARY EVIDENCE WARRANTY"] || "No evidence provided",
-      "7.7 MEMO 8: EXCESS CLAUSE": parsed["7.7 MEMO 8: EXCESS CLAUSE"] || "Excess not specified",
-      "7.8 MEMO 14: MAINTENANCE WARRANTY": parsed["7.8 MEMO 14: MAINTENANCE WARRANTY"] || "Maintenance not verified",
-      "7.9 MEMO 15: WAY BILL CLAUSE": parsed["7.9 MEMO 15: WAY BILL CLAUSE"] || "Way bill not provided",
-      "7.10 MEMO 18: HIRED VEHICLE WARRANTY": parsed["7.10 MEMO 18: HIRED VEHICLE WARRANTY"] || "Hired vehicle not applicable",
-      "7.11 MEMO 6: ARBITRATION CLAUSE": parsed["7.11 MEMO 6: ARBITRATION CLAUSE"] || "Arbitration not applicable",
-      "7.12 MEMO 7: LOADING AND UNLOADING EXTENSION CLAUSE": parsed["7.12 MEMO 7: LOADING AND UNLOADING EXTENSION CLAUSE"] || "Extension not applicable",
-      "7.13 MEMO 9: DISAPPEARANCE OF CONVEYANCE CLAUSE": parsed["7.13 MEMO 9: DISAPPEARANCE OF CONVEYANCE CLAUSE"] || "Disappearance not noted",
-      "7.14 MEMO 10: AUTOMATIC REINSTATEMENT OF SUM INSURED AFTER LOSS CLAUSE": parsed["7.14 MEMO 10: AUTOMATIC REINSTATEMENT OF SUM INSURED AFTER LOSS CLAUSE"] || "Reinstatement not applicable",
-      "7.15 MEMO 11: POLITICAL RISKS EXCLUSION CLAUSE": parsed["7.15 MEMO 11: POLITICAL RISKS EXCLUSION CLAUSE"] || "Political risks not excluded",
-      "7.16 MEMO 12: COLLUSION CLAUSE": parsed["7.16 MEMO 12: COLLUSION CLAUSE"] || "Collusion not noted",
-      "7.17 MEMO 13: CARE AND PROTECTION CLAUSE": parsed["7.17 MEMO 13: CARE AND PROTECTION CLAUSE"] || "Care not verified",
-      "7.18 MEMO 14: DISHONESTY OF DRIVERS’ CLAUSE": parsed["7.18 MEMO 14: DISHONESTY OF DRIVERS’ CLAUSE"] || "Dishonesty not reported",
-      "7.19 MEMO 15: RECORD OF GOODS WARRANTY": parsed["7.19 MEMO 15: RECORD OF GOODS WARRANTY"] || "Records not provided",
-      "7.20 MEMO 16: VEHICLE LOAD CLAUSE": parsed["7.20 MEMO 16: VEHICLE LOAD CLAUSE"] || "Load not specified",
-      "7.21 MEMO 17: TARPAULIN WARRANTY (APPLICABLE TO VEHICLE WITH OPEN BODY)": parsed["7.21 MEMO 17: TARPAULIN WARRANTY (APPLICABLE TO VEHICLE WITH OPEN BODY)"] || "Tarpaulin not applicable",
-      "7.22 MEMO 18: CONTAINERIZED VEHICLES CLAUSE": parsed["7.22 MEMO 18: CONTAINERIZED VEHICLES CLAUSE"] || "Containerization not applicable",
-      "7.23 MEMO 19: HIRED VEHICLE WARRANTY": parsed["7.23 MEMO 19: HIRED VEHICLE WARRANTY"] || "Hired vehicle not applicable",
-      "7.24 MEMO 20: PRECAUTIONS AND PROTECTIONS": parsed["7.24 MEMO 20: PRECAUTIONS AND PROTECTIONS"] || "Precautions not specified",
-      "7.25 MEMO 21: UNATTENDED VEHICLE WARRANTY": parsed["7.25 MEMO 21: UNATTENDED VEHICLE WARRANTY"] || "Unattended status not verified",
-      "7.26 MEMO 22: INHERENT VICE OF THE SUBJECT MATTER": parsed["7.26 MEMO 22: INHERENT VICE OF THE SUBJECT MATTER"] || "Inherent vice not noted",
-      "7.27 MEMO 23: EXCLUSION OF DELICATE GOODS": parsed["7.27 MEMO 23: EXCLUSION OF DELICATE GOODS"] || "Delicate goods not excluded",
-      "7.28 MEMO 24: TERRORISM EXCLUSION CLAUSE": parsed["7.28 MEMO 24: TERRORISM EXCLUSION CLAUSE"] || "Terrorism not excluded",
-      "7.29 MEMO 25: ALTERNATIVE DISPUTE RESOLUTION CLAUSE": parsed["7.29 MEMO 25: ALTERNATIVE DISPUTE RESOLUTION CLAUSE"] || "Dispute resolution not applicable",
-      "7.30 MEMO 26: CLAIMS/LOSS RATIO WARRANTY": parsed["7.30 MEMO 26: CLAIMS/LOSS RATIO WARRANTY"] || "Loss ratio not specified",
-      "7.31 MEMO 27: SALVAGE RETRIEVAL CLAUSE": parsed["7.31 MEMO 27: SALVAGE RETRIEVAL CLAUSE"] || "Salvage retrieval not applicable",
-      "7.32 MEMO 28: PREMIUM PAYMENT DEFERRAL CLAUSE": parsed["7.32 MEMO 28: PREMIUM PAYMENT DEFERRAL CLAUSE"] || "Payment deferral not applicable",
-      "7.33 MEMO 29: RIOT, STRIKES & CIVIL COMMOTION": parsed["7.33 MEMO 29: RIOT, STRIKES & CIVIL COMMOTION"] || "Riot not applicable",
-      "7.34 MEMO 30: CLAIM NOTIFICATION AND DOCUMENTATION WARRANTY": parsed["7.34 MEMO 30: CLAIM NOTIFICATION AND DOCUMENTATION WARRANTY"] || "Notification not verified",
-      "7.35 MEMO 31: NO PREMIUM NO COVER WARRANTY": parsed["7.35 MEMO 31: NO PREMIUM NO COVER WARRANTY"] || "No memo provided",
-      "7.36 Photographs": parsed["7.36 Photographs"] || "No photographs available",
-      "7.37 Adequacy of the Limit Per carrying": parsed["7.37 Adequacy of the Limit Per carrying"] || "Limit adequacy not assessed",
-      "7.38 Other Insurances": parsed["7.38 Other Insurances"] || "No other insurances noted",
-      "7.39 Breach of Policy Terms": parsed["7.39 Breach of Policy Terms"] || "No breaches identified",
-      "7.40 SALVAGE": parsed["7.40 SALVAGE"] || "Salvage not evaluated",
-      "8.0 THE INSURED’S CLAIM": parsed["8.0 THE INSURED’S CLAIM"] || "Claim details unavailable",
-      "9.0 OUR VERIFICATION OF THE LOSS": parsed["9.0 OUR VERIFICATION OF THE LOSS"] || "Loss not verified",
-      "10.0 CONSIDERATION OF LIABILITY": parsed["10.0 CONSIDERATION OF LIABILITY"] || "Liability not considered",
-      "11.0 ADJUSTMENT": parsed["11.0 ADJUSTMENT"] || "No adjustment made",
-      "12.0 RISK IMPROVEMENT": parsed["12.0 RISK IMPROVEMENT"] || "No improvements suggested",
-      "13.0 DISCHARGE OF CLAIM": parsed["13.0 DISCHARGE OF CLAIM"] || "Claim not discharged",
-      "14.0 LOSS ADJUSTERS’ FEES AND EXPENSES": parsed["14.0 LOSS ADJUSTERS’ FEES AND EXPENSES"] || "Fees not calculated",
-      "15.0 SUMMARY OF ADJUSTMENT AND ADJUSTER’S BILL": parsed["15.0 SUMMARY OF ADJUSTMENT AND ADJUSTER’S BILL"] || "Summary not available",
-      "16.0 METHOD OF SETTLEMENT": parsed["16.0 METHOD OF SETTLEMENT"] || "Settlement method not determined",
-      "17.0 ATTACHMENT TO THE FINAL REPORT": parsed["17.0 ATTACHMENT TO THE FINAL REPORT"] || "No attachments provided"
-    };
-  } catch (error) {
-    console.error('Full AI Error:', error.message);
-    return {
-      "PREFACE": "Analysis failed",
-      "1.0 THE INSURED": "Insured details unavailable",
-      "2.0 FACTS OF THE ACCIDENT": "No facts provided",
-      "3.0 PROXIMATE CAUSE OF LOSS": "Cause unknown",
-      "4.0 INTERVIEWS": "No interviews conducted",
-      "4.1 Replace with name": "No interview details",
-      "4.2 Replace with name": "No interview details",
-      "5.0 MOTOR VEHICLE PARTICULARS": "Vehicle details unavailable",
-      "6.0 DRIVER’S LICENSE": "License details unavailable",
-      "7.0 POLICY TERMS AND CONDITIONS": "Terms not specified",
-      "7.1 Scope of Cover": "Scope not defined",
-      "7.2 Notification of Claim": "Notification not recorded",
-      "7.3 Period of Cover": "Period not specified",
-      "7.4 MEMO 2: JURISDICTION CLAUSE": "Jurisdiction not noted",
-      "7.5 MEMO 5: AUTOMATIC REINSTATEMENT OF SUM INSURED AFTER LOSS CLAUSE": "Reinstatement not applicable",
-      "7.6 MEMO 6: DOCUMENTARY EVIDENCE WARRANTY": "No evidence provided",
-      "7.7 MEMO 8: EXCESS CLAUSE": "Excess not specified",
-      "7.8 MEMO 14: MAINTENANCE WARRANTY": "Maintenance not verified",
-      "7.9 MEMO 15: WAY BILL CLAUSE": "Way bill not provided",
-      "7.10 MEMO 18: HIRED VEHICLE WARRANTY": "Hired vehicle not applicable",
-      "7.11 MEMO 6: ARBITRATION CLAUSE": "Arbitration not applicable",
-      "7.12 MEMO 7: LOADING AND UNLOADING EXTENSION CLAUSE": "Extension not applicable",
-      "7.13 MEMO 9: DISAPPEARANCE OF CONVEYANCE CLAUSE": "Disappearance not noted",
-      "7.14 MEMO 10: AUTOMATIC REINSTATEMENT OF SUM INSURED AFTER LOSS CLAUSE": "Reinstatement not applicable",
-      "7.15 MEMO 11: POLITICAL RISKS EXCLUSION CLAUSE": "Political risks not excluded",
-      "7.16 MEMO 12: COLLUSION CLAUSE": "Collusion not noted",
-      "7.17 MEMO 13: CARE AND PROTECTION CLAUSE": "Care not verified",
-      "7.18 MEMO 14: DISHONESTY OF DRIVERS’ CLAUSE": "Dishonesty not reported",
-      "7.19 MEMO 15: RECORD OF GOODS WARRANTY": "Records not provided",
-      "7.20 MEMO 16: VEHICLE LOAD CLAUSE": "Load not specified",
-      "7.21 MEMO 17: TARPAULIN WARRANTY (APPLICABLE TO VEHICLE WITH OPEN BODY)": "Tarpaulin not applicable",
-      "7.22 MEMO 18: CONTAINERIZED VEHICLES CLAUSE": "Containerization not applicable",
-      "7.23 MEMO 19: HIRED VEHICLE WARRANTY": "Hired vehicle not applicable",
-      "7.24 MEMO 20: PRECAUTIONS AND PROTECTIONS": "Precautions not specified",
-      "7.25 MEMO 21: UNATTENDED VEHICLE WARRANTY": "Unattended status not verified",
-      "7.26 MEMO 22: INHERENT VICE OF THE SUBJECT MATTER": "Inherent vice not noted",
-      "7.27 MEMO 23: EXCLUSION OF DELICATE GOODS": "Delicate goods not excluded",
-      "7.28 MEMO 24: TERRORISM EXCLUSION CLAUSE": "Terrorism not excluded",
-      "7.29 MEMO 25: ALTERNATIVE DISPUTE RESOLUTION CLAUSE": "Dispute resolution not applicable",
-      "7.30 MEMO 26: CLAIMS/LOSS RATIO WARRANTY": "Loss ratio not specified",
-      "7.31 MEMO 27: SALVAGE RETRIEVAL CLAUSE": "Salvage retrieval not applicable",
-      "7.32 MEMO 28: PREMIUM PAYMENT DEFERRAL CLAUSE": "Payment deferral not applicable",
-      "7.33 MEMO 29: RIOT, STRIKES & CIVIL COMMOTION": "Riot not applicable",
-      "7.34 MEMO 30: CLAIM NOTIFICATION AND DOCUMENTATION WARRANTY": "Notification not verified",
-      "7.35 MEMO 31: NO PREMIUM NO COVER WARRANTY": "No memo provided",
-      "7.36 Photographs": "No photographs available",
-      "7.37 Adequacy of the Limit Per carrying": "Limit adequacy not assessed",
-      "7.38 Other Insurances": "No other insurances noted",
-      "7.39 Breach of Policy Terms": "No breaches identified",
-      "7.40 SALVAGE": "Salvage not evaluated",
-      "8.0 THE INSURED’S CLAIM": "Claim details unavailable",
-      "9.0 OUR VERIFICATION OF THE LOSS": "Loss not verified",
-      "10.0 CONSIDERATION OF LIABILITY": "Liability not considered",
-      "11.0 ADJUSTMENT": "No adjustment made",
-      "12.0 RISK IMPROVEMENT": "No improvements suggested",
-      "13.0 DISCHARGE OF CLAIM": "Claim not discharged",
-      "14.0 LOSS ADJUSTERS’ FEES AND EXPENSES": "Fees not calculated",
-      "15.0 SUMMARY OF ADJUSTMENT AND ADJUSTER’S BILL": "Summary not available",
-      "16.0 METHOD OF SETTLEMENT": "Settlement method not determined",
-      "17.0 ATTACHMENT TO THE FINAL REPORT": "No attachments provided"
-    };
+    if (ext === '.txt') {
+      return await fs.readFile(filePath, 'utf-8');
+    }
+    if (ext === '.pdf') {
+      const pdfParse = require('pdf-parse');
+      const dataBuffer = await fs.readFile(filePath);
+      const data = await pdfParse(dataBuffer);
+      return data.text;
+    }
+    if (['.doc', '.docx'].includes(ext)) {
+      const mammoth = require('mammoth');
+      const buffer = await fs.readFile(filePath);
+      const result = await mammoth.extractRawText({ buffer });
+      return result.value;
+    }
+    return `[File content not extracted — ${ext} file: ${path.basename(filePath)}]`;
+  } catch (err) {
+    console.warn(`Could not extract text from ${filePath}:`, err.message);
+    return `[Error reading file: ${path.basename(filePath)}]`;
   }
+}
+
+// ---------------------------------------------------------------
+async function fileToBase64(filePath) {
+  const buffer = await fs.readFile(filePath);
+  return buffer.toString('base64');
+}
+
+function mimeFromExt(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.gif') return 'image/gif';
+  if (ext === '.webp') return 'image/webp';
+  return 'image/jpeg';
+}
+
+// ---------------------------------------------------------------
+async function callLLM({ agent, model, prompt, textFiles = [], imageFiles = [], temperature, max_tokens, metadata }) {
+  switch (agent) {
+    case 'claude':
+      return callClaude({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata });
+    case 'chatgpt':
+      return callOpenAI({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata });
+    case 'grok':
+      return callGrok({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata });
+    case 'gemini':
+      return callGemini({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata });
+    default:
+      throw new Error(`Unsupported agent: ${agent}`);
+  }
+}
+
+// ---------------------------------------------------------------
+async function callClaude({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata }) {
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+  const content = [{ type: 'text', text: prompt }];
+
+  for (const filePath of textFiles) {
+    const text = await extractTextFromFile(filePath);
+    content.push({ type: 'text', text: `\n\n--- Document: ${path.basename(filePath)} ---\n${text}` });
+  }
+
+  for (const imgPath of imageFiles) {
+    try {
+      const base64 = await fileToBase64(imgPath);
+      content.push({ type: 'image', source: { type: 'base64', media_type: mimeFromExt(imgPath), data: base64 } });
+    } catch (err) {
+      console.error(`Error processing image ${imgPath}:`, err);
+    }
+  }
+
+  const msg = await anthropic.messages.create({
+    model: model || 'claude-sonnet-4-6',
+    max_tokens: max_tokens || 4096,
+    temperature: temperature ?? 0.3,
+    messages: [{ role: 'user', content }],
+  });
+
+  return { content: msg.content[0].text };
+}
+
+// ---------------------------------------------------------------
+async function callOpenAI({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata }) {
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+  const messages = [
+    { role: 'system', content: 'You are an expert insurance claims adjuster with extensive experience in analyzing claims and writing professional reports.' }
+  ];
+
+  const userContent = [{ type: 'text', text: prompt }];
+
+  for (const filePath of textFiles) {
+    const text = await extractTextFromFile(filePath);
+    userContent.push({ type: 'text', text: `\n\n[Document: ${path.basename(filePath)}]\n${text}` });
+  }
+
+  for (const imgPath of imageFiles) {
+    try {
+      const base64 = await fileToBase64(imgPath);
+      userContent.push({ type: 'image_url', image_url: { url: `data:${mimeFromExt(imgPath)};base64,${base64}` } });
+    } catch (err) {
+      console.error(`Error processing image ${imgPath}:`, err);
+    }
+  }
+
+  messages.push({ role: 'user', content: userContent });
+
+  const completion = await openai.chat.completions.create({
+    model: model || 'gpt-4o',
+    messages,
+    temperature: temperature ?? 0.3,
+    max_tokens: max_tokens || 4096,
+  });
+
+  return { content: completion.choices[0].message.content };
+}
+
+// ---------------------------------------------------------------
+async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata }) {
+  const xai = new OpenAI({ apiKey: process.env.XAI_API_KEY, baseURL: 'https://api.x.ai/v1' });
+
+  const messages = [
+    { role: 'system', content: 'You are Grok — expert insurance analyst with deep knowledge of claims processing and risk assessment.' }
+  ];
+
+  const userContent = [{ type: 'text', text: prompt }];
+
+  for (const filePath of textFiles) {
+    const text = await extractTextFromFile(filePath);
+    userContent.push({ type: 'text', text: `\n\n[File: ${path.basename(filePath)}]\n${text}` });
+  }
+
+  for (const imgPath of imageFiles) {
+    try {
+      const base64 = await fileToBase64(imgPath);
+      userContent.push({ type: 'image_url', image_url: { url: `data:${mimeFromExt(imgPath)};base64,${base64}` } });
+    } catch (err) {
+      console.error(`Error processing image ${imgPath}:`, err);
+    }
+  }
+
+  messages.push({ role: 'user', content: userContent });
+
+  const completion = await xai.chat.completions.create({
+    model: model || 'grok-4',
+    messages,
+    temperature: temperature ?? 0.3,
+    max_tokens: max_tokens || 4096,
+  });
+
+  return { content: completion.choices[0].message.content };
+}
+
+// ---------------------------------------------------------------
+async function callGemini({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata }) {
+  try {
+    const { GoogleGenAI } = await import('@google/genai');
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY, apiVersion: 'v1beta' });
+
+    const modelMap = {
+      'gemini-1.5-pro': 'gemini-2.5-pro',
+      'gemini-3-pro': 'gemini-3-pro-preview',
+      'gemini-3-flash': 'gemini-3-flash-preview',
+      'gemini-2.5-pro': 'gemini-2.5-pro',
+      'gemini-3-flash-preview': 'gemini-3-flash-preview',
+    };
+    const targetModel = modelMap[model] || 'gemini-3-flash-preview';
+
+    const parts = [{ text: prompt }];
+
+    for (const filePath of textFiles) {
+      const text = await extractTextFromFile(filePath);
+      parts.push({ text: `\n\n[Document: ${path.basename(filePath)}]\n${text}` });
+    }
+
+    for (const imgPath of imageFiles) {
+      try {
+        const base64 = await fileToBase64(imgPath);
+        parts.push({ inlineData: { mimeType: mimeFromExt(imgPath), data: base64 } });
+      } catch (err) {
+        console.error(`Error processing image ${imgPath}:`, err);
+      }
+    }
+
+    const result = await ai.models.generateContent({
+      model: targetModel,
+      contents: [{ role: 'user', parts }],
+      config: { temperature: temperature ?? 0.3, maxOutputTokens: max_tokens || 4096, thinking: { level: 'high' } }
+    });
+
+    return { content: result.response.text() };
+  } catch (error) {
+    console.error('Gemini Service Error:', error);
+    throw new Error(`Gemini API error: ${error.message}`);
+  }
+}
+
+// ---------------------------------------------------------------
+function formatTrainingExamples(trainingExamples) {
+  if (!trainingExamples || trainingExamples.length === 0) return '';
+
+  let trainingSection = '\n\n═══════════════════════════════════════════════════════════\n';
+  trainingSection += '📚 REFERENCE EXAMPLES - LEARN FROM THESE REPORTS\n';
+  trainingSection += '═══════════════════════════════════════════════════════════\n\n';
+  trainingSection += `You have ${trainingExamples.length} reference report(s) to learn from. Study these carefully:\n\n`;
+  trainingSection += '**CRITICAL INSTRUCTIONS:**\n';
+  trainingSection += '1. Analyze the WRITING STYLE, TONE, and STRUCTURE of these reference reports\n';
+  trainingSection += '2. Note the SPECIFIC TERMINOLOGY and PHRASING used\n';
+  trainingSection += '3. Observe how sections are ORGANIZED and FORMATTED\n';
+  trainingSection += '4. Pay attention to the LEVEL OF DETAIL provided\n';
+  trainingSection += '5. MIMIC this exact style in your new report\n';
+  trainingSection += '6. Match the PROFESSIONAL TONE and FORMALITY LEVEL\n';
+  trainingSection += '7. Use SIMILAR SENTENCE STRUCTURES and PARAGRAPH LENGTH\n\n';
+
+  trainingExamples.forEach((example, idx) => {
+    trainingSection += `───────────────────────────────────────────────────────────\n`;
+    trainingSection += `REFERENCE REPORT ${idx + 1}:\n`;
+    trainingSection += `Title: ${example.filename}\n`;
+    if (example.author) trainingSection += `Author: ${example.author}\n`;
+    if (example.yearWritten) trainingSection += `Year: ${example.yearWritten}\n`;
+    if (example.description) trainingSection += `Description: ${example.description}\n`;
+    trainingSection += `───────────────────────────────────────────────────────────\n\n`;
+
+    const contentPreview = example.textContent.substring(0, 15000);
+    trainingSection += `${contentPreview}\n\n`;
+    if (example.textContent.length > 15000) trainingSection += `[... Report continues ...]\n\n`;
+  });
+
+  trainingSection += '═══════════════════════════════════════════════════════════\n';
+  trainingSection += 'END OF REFERENCE EXAMPLES\n';
+  trainingSection += '═══════════════════════════════════════════════════════════\n\n';
+  trainingSection += '**NOW CREATE YOUR REPORT:**\n';
+  trainingSection += 'Using the EXACT SAME STYLE, TONE, and STRUCTURE as the reference reports above,\n';
+  trainingSection += 'create a new report for the current claim. Match the writing style as closely as possible.\n\n';
+
+  return trainingSection;
+}
+
+// ---------------------------------------------------------------
+function buildScrutinyPrompt(metadata) {
+  let focus = '';
+
+  if (metadata.structuredHeadlines && metadata.structuredHeadlines.length > 0) {
+    metadata.structuredHeadlines.forEach(h => {
+      const mainHeadline = h.main.toUpperCase();
+      if (mainHeadline.includes('THE INSURED')) {
+        focus += `\n\n${h.main}:\nConduct an online search for "${metadata.insuredName}" and write a comprehensive 3-paragraph background covering the company's history, operations, industry standing, and any relevant business activities. Use reported speech (past tense) and write in essay format, not bullet points.`;
+      } else if (mainHeadline.includes('POLICY TERMS') || mainHeadline.includes('POLICY CONDITIONS')) {
+        focus += `\n\n${h.main}:\nCarefully review the Policy Document and any Endorsements provided. First, list all applicable Memos, Clauses, Warranties, Conditions, and Exclusions that are RELEVANT to this specific claim. Then, separately list those that are NOT relevant to this claim. Write in reported speech and essay format.`;
+      } else if (mainHeadline.includes('INTERVIEW')) {
+        focus += `\n\n${h.main}:\nDocument the interviews conducted. For each person interviewed, state their name, position, and a comprehensive summary of the conversation in reported speech (past tense). Write in paragraph form, not bullet points.`;
+        if (metadata.interviews && metadata.interviews.length > 0) {
+          focus += '\n\nInterviews conducted:';
+          metadata.interviews.forEach(interview => {
+            if (interview.name || interview.conversation) {
+              focus += `\n- ${interview.name}: ${interview.conversation}`;
+            }
+          });
+        }
+      } else {
+        focus += `\n- ${h.main}`;
+      }
+      if (h.subpoints && h.subpoints.length > 0) {
+        h.subpoints.forEach(s => { focus += `\n  • ${s.title}`; });
+      }
+    });
+  } else {
+    focus = 'No specific focus areas provided — use standard scrutiny checklist';
+  }
+
+  const trainingSection = formatTrainingExamples(metadata.trainingExamples);
+
+  return `
+You are a senior insurance claims adjuster with 15+ years experience in ${metadata.classOfBusiness} insurance.
+
+${trainingSection}
+
+CRITICAL WRITING REQUIREMENTS:
+1. Write ENTIRELY in reported speech (past tense)
+2. Use essay format with flowing paragraphs - NO bullet points, NO asterisks, NO hashtags
+3. Write in natural, human language - avoid AI-style formatting
+4. Be professional but conversational in tone
+5. Use proper paragraph structure with topic sentences and supporting details
+
+Claim Details:
+Claim Number: ${metadata.claimNumber}
+Policy Number: ${metadata.policyNumber}
+Insured: ${metadata.insuredName}
+Date of Loss: ${metadata.dateOfLoss}
+Location: ${metadata.locationOfLoss}
+Class of Business: ${metadata.classOfBusiness}
+
+Loss Description:
+${metadata.lossDescription}
+
+Focus areas for scrutiny:
+${focus}
+
+PHOTOGRAPHS SECTION:
+Review all uploaded photographs carefully. In a dedicated "PHOTOGRAPHS" section at the end of your report, describe each photograph in detail, explaining what it shows, its relevance to the claim, and any observations about the damage or evidence depicted. Write in reported speech.
+
+${metadata.customPrompt ? `\nADDITIONAL ANALYSIS REQUIRED:\n${metadata.customPrompt}\n` : ''}
+
+RISK MITIGATION ANALYSIS:
+At the end of the report, include a comprehensive "RISK IMPROVEMENT AND MITIGATION" section that analyzes this claim and provides recommendations on how to prevent similar incidents in the future. Consider industry best practices, safety measures, policy recommendations, and operational improvements.
+
+Remember: Write everything in reported speech (past tense), use essay format with paragraphs, avoid all bullet points and AI-style formatting.
+`;
+}
+
+function buildPreliminaryPrompt(metadata) {
+  const structure =
+    metadata.structuredHeadlines?.map(h => {
+      let section = `${h.number}. ${h.main}`;
+      const mainHeadline = h.main.toUpperCase();
+      if (mainHeadline.includes('THE INSURED')) {
+        section += '\n   Conduct online research and write 3 comprehensive paragraphs about the insured entity.';
+      } else if (mainHeadline.includes('POLICY TERMS') || mainHeadline.includes('POLICY CONDITIONS')) {
+        section += '\n   Review policy documents and categorize applicable clauses, exclusions, and conditions.';
+      } else if (mainHeadline.includes('INTERVIEW')) {
+        section += '\n   Document all interviews in reported speech with names and detailed conversation summaries.';
+      }
+      if (h.subpoints && h.subpoints.length > 0) {
+        section += '\n' + h.subpoints.map(s => `   ${s.number} ${s.title}`).join('\n');
+      }
+      return section;
+    }).join('\n') || 'Use standard preliminary report format';
+
+  return `
+You are preparing a Preliminary / Interim Claims Report for ${metadata.classOfBusiness} insurance.
+
+${formatTrainingExamples(metadata.trainingExamples)}
+
+CRITICAL WRITING REQUIREMENTS:
+1. Write ENTIRELY in reported speech (past tense)
+2. Use essay format with flowing paragraphs - NO bullet points, NO asterisks, NO hashtags
+3. Write in natural, human language - avoid AI-style formatting
+4. Be professional but conversational in tone
+
+Claim Information:
+Claim Number: ${metadata.claimNumber}
+Policy Number: ${metadata.policyNumber}
+Insured: ${metadata.insuredName}
+Date of Loss: ${metadata.dateOfLoss}
+Location: ${metadata.locationOfLoss}
+Class of Business: ${metadata.classOfBusiness}
+
+Report Structure:
+${structure}
+
+PHOTOGRAPHS SECTION:
+Review and describe all uploaded photographs in detail, explaining their relevance to the claim.
+
+RISK IMPROVEMENT AND MITIGATION:
+Include a final section analyzing how to prevent similar incidents, with specific recommendations for risk reduction.
+
+Write everything in reported speech (past tense) using essay format. Avoid bullet points and AI-style formatting.
+`;
+}
+
+function buildFinalPrompt(metadata) {
+  const structure =
+    metadata.structuredHeadlines?.map(h => {
+      let section = `${h.number}. ${h.main}`;
+      const mainHeadline = h.main.toUpperCase();
+      if (mainHeadline.includes('THE INSURED')) {
+        section += '\n   Research and write 3 comprehensive paragraphs about the insured.';
+      } else if (mainHeadline.includes('POLICY TERMS') || mainHeadline.includes('POLICY CONDITIONS')) {
+        section += '\n   Analyze policy documents thoroughly, listing applicable and non-applicable clauses.';
+      } else if (mainHeadline.includes('INTERVIEW')) {
+        section += '\n   Document interviews comprehensively in reported speech.';
+      }
+      if (h.subpoints && h.subpoints.length > 0) {
+        section += '\n' + h.subpoints.map(s => `   ${s.number} ${s.title}`).join('\n');
+      }
+      return section;
+    }).join('\n') || 'Standard final report structure';
+
+  return `
+You are preparing a Final Adjustment Report for ${metadata.classOfBusiness} insurance.
+
+${formatTrainingExamples(metadata.trainingExamples)}
+
+CRITICAL WRITING REQUIREMENTS:
+1. Write ENTIRELY in reported speech (past tense)
+2. Use essay format with flowing paragraphs - NO bullet points, NO asterisks, NO hashtags
+3. Write in natural, human language - avoid AI-style formatting
+4. Maintain professional but conversational tone throughout
+
+Claim Information:
+Claim Number: ${metadata.claimNumber}
+Policy Number: ${metadata.policyNumber}
+Insured: ${metadata.insuredName}
+Date of Loss: ${metadata.dateOfLoss}
+Location: ${metadata.locationOfLoss}
+Class of Business: ${metadata.classOfBusiness}
+
+Report Structure:
+${structure}
+
+PHOTOGRAPHS SECTION:
+Provide detailed descriptions of all photographs, explaining what they show and their significance to the claim.
+
+RISK IMPROVEMENT AND MITIGATION:
+Conclude with a comprehensive analysis of preventive measures and recommendations to avoid similar incidents in the future. Consider industry standards, safety protocols, and operational improvements.
+
+This is a final report for insurers and reinsurers. Write everything in reported speech (past tense) using essay format. Avoid all bullet points and AI-style formatting.
+`;
+}
+
+// =================================================================
+// NEW: LETTERHEAD REWRITE
+//
+// Takes an official letterhead template (as text and/or image, since
+// letterheads are often a scanned/branded PDF or DOCX with a logo)
+// plus a field report (and optionally policy/endorsement/other docs
+// and photos), and rewrites or extends the field report content into
+// the letterhead's format and voice. Supports free-form instructions
+// and is designed to be called repeatedly in the same sessionId so
+// the user can go back and forth ("also add a paragraph on X",
+// "reference photo 3 more specifically") without re-uploading files.
+// =================================================================
+
+function buildLetterheadPrompt({ metadata, historyBlock, isFollowUp }) {
+  const {
+    instructions,
+    insuredName,
+    claimNumber,
+    policyNumber,
+    dateOfLoss,
+    locationOfLoss,
+    classOfBusiness,
+  } = metadata;
+
+  return `
+You are a senior insurance claims adjuster producing an official report on the firm's letterhead.
+
+${historyBlock}
+
+TASK:
+${isFollowUp
+  ? 'This is a FOLLOW-UP request in an ongoing letterhead rewrite session. Use the prior context above (the letterhead template and the report you already produced) and apply the new instruction below. Return the FULL updated report, not just the changed part, unless the instruction explicitly asks for a fragment.'
+  : `You have been given (1) an official letterhead template document/image, and (2) one or more field reports and supporting documents. Rewrite the field report content INTO the letterhead's structure, heading style, numbering convention, and formatting — matching its layout, section order, and formality as closely as the source material allows. Where the field report is missing information the letterhead format expects, note it as "[TO BE CONFIRMED]" rather than inventing facts.`}
+
+CRITICAL WRITING REQUIREMENTS:
+1. Match the letterhead's own structure and section headings — do not impose the standard Scrutiny/Preliminary/Final template unless the letterhead itself uses it.
+2. Write in reported speech (past tense), essay format, no bullet points or markdown symbols in the final report body.
+3. If photographs are provided, analyze each one and integrate relevant observations into the appropriate section (or a dedicated Photographs section if the letterhead has one) rather than just listing them.
+4. Do not fabricate figures, names, or dates that are not present in the source documents.
+
+Claim Reference Details (use only where they fit the letterhead's fields):
+Claim Number: ${claimNumber || 'Not provided'}
+Policy Number: ${policyNumber || 'Not provided'}
+Insured: ${insuredName || 'Not provided'}
+Date of Loss: ${dateOfLoss || 'Not provided'}
+Location: ${locationOfLoss || 'Not provided'}
+Class of Business: ${classOfBusiness || 'Not provided'}
+
+USER INSTRUCTIONS FOR THIS REQUEST:
+${instructions || 'No additional instructions — rewrite the field report faithfully into the letterhead format.'}
+
+If anything about the letterhead format or the requested changes is ambiguous, end your response with a short "QUESTIONS FOR YOU:" section listing what you need clarified before finalizing — but still provide your best-effort full draft above it.
+`;
+}
+
+/**
+ * @param {object} params
+ *   agent, model, sessionId (claimNumber or generated id),
+ *   letterheadFiles (text/pdf/docx of the template),
+ *   letterheadImages (if the letterhead itself is an image/scan),
+ *   fieldReportFiles, policyFiles, endorsementFiles, additionalFiles,
+ *   photoFiles, instructions, metadata (claim fields), isFollowUp
+ */
+async function rewriteToLetterhead(params) {
+  const {
+    agent = 'claude',
+    model,
+    sessionId,
+    letterheadFiles = [],
+    letterheadImages = [],
+    fieldReportFiles = [],
+    policyFiles = [],
+    endorsementFiles = [],
+    additionalFiles = [],
+    photoFiles = [],
+    instructions = '',
+    metadata = {},
+    isFollowUp = false,
+    temperature = 0.3,
+    max_tokens = 4096,
+  } = params;
+
+  const resolvedSessionId = sessionId || sessionStore.makeSessionId(metadata.claimNumber);
+
+  const historyBlock = sessionStore.formatHistoryForPrompt(resolvedSessionId, { tab: 'letterhead' });
+
+  const prompt = buildLetterheadPrompt({
+    metadata: { ...metadata, instructions },
+    historyBlock,
+    isFollowUp,
+  });
+
+  // Log the user's turn before calling the model, so a crash mid-call
+  // still leaves a record of what was asked.
+  sessionStore.appendEntry(resolvedSessionId, {
+    tab: 'letterhead',
+    agent,
+    role: 'user',
+    prompt: instructions || '[initial letterhead rewrite request]',
+  });
+
+  const textFiles = [...letterheadFiles, ...fieldReportFiles, ...policyFiles, ...endorsementFiles, ...additionalFiles];
+  const imageFiles = [...letterheadImages, ...photoFiles];
+
+  const result = await callLLM({
+    agent,
+    model,
+    prompt,
+    textFiles,
+    imageFiles,
+    temperature,
+    max_tokens,
+    metadata,
+  });
+
+  sessionStore.appendEntry(resolvedSessionId, {
+    tab: 'letterhead',
+    agent,
+    role: 'assistant',
+    response: result.content,
+  });
+
+  return { ...result, sessionId: resolvedSessionId };
+}
+
+// =================================================================
+// NEW: MULTI-AGENT COLLABORATION
+//
+// Runs a request across some or all of the configured agents
+// (Claude, ChatGPT, Grok, Gemini). Two modes:
+//   - discuss = false: each selected agent answers the same prompt
+//     independently ("single-shot" / parallel mode) and results are
+//     returned side by side for the user to compare or merge.
+//   - discuss = true: agents run in sequence, each one seeing the
+//     prior agents' responses in the same round, for N rounds, then
+//     a final synthesis pass produces one merged answer. This lets
+//     e.g. Claude critique ChatGPT's draft, Grok flag a gap, etc.
+// =================================================================
+
+function buildCollaborationTurnPrompt({ basePrompt, agentLabel, priorTurns, roundNumber, totalRounds, historyBlock }) {
+  let priorTurnsBlock = '';
+  if (priorTurns.length > 0) {
+    priorTurnsBlock = '\n\nRESPONSES SO FAR IN THIS DISCUSSION:\n';
+    priorTurns.forEach(t => {
+      priorTurnsBlock += `\n--- ${t.agentLabel} (round ${t.round}) ---\n${t.content}\n`;
+    });
+  }
+
+  return `
+You are ${agentLabel}, one of several AI adjusters collaborating on this claims task. This is round ${roundNumber} of ${totalRounds}.
+
+${historyBlock}
+
+TASK FROM THE USER:
+${basePrompt}
+${priorTurnsBlock}
+
+INSTRUCTIONS:
+- If this is round 1, give your own independent analysis/draft.
+- If other agents have already responded this round or in earlier rounds, read their input above. Agree where you agree, but explicitly flag anything you think is wrong, incomplete, or worth reconsidering — don't just restate what's already been said.
+- Keep your response focused; the goal is a better final answer, not a longer one.
+- Write in reported speech, essay format, no bullet points in the substantive analysis (a short list is fine only for flagging disagreements).
+`;
+}
+
+function buildSynthesisPrompt({ basePrompt, allTurns, historyBlock }) {
+  let transcript = '';
+  allTurns.forEach(t => {
+    transcript += `\n--- ${t.agentLabel} (round ${t.round}) ---\n${t.content}\n`;
+  });
+
+  return `
+You are producing the FINAL synthesized answer from a multi-agent collaboration.
+
+${historyBlock}
+
+ORIGINAL TASK:
+${basePrompt}
+
+FULL DISCUSSION TRANSCRIPT:
+${transcript}
+
+Produce one final, coherent report/answer that takes the best of each agent's contribution, resolves any disagreements with a clear rationale, and reads as a single unified document — not a summary of who said what. Write in reported speech, essay format, professional tone.
+`;
+}
+
+const AGENT_LABELS = { claude: 'Claude', chatgpt: 'ChatGPT', grok: 'Grok', gemini: 'Gemini' };
+
+/**
+ * @param {object} params
+ *   agents: array of agent keys to include, e.g. ['claude','chatgpt']
+ *   discuss: boolean — false = parallel independent answers, true = sequential discussion + synthesis
+ *   rounds: number of discussion rounds when discuss=true (default 2)
+ *   synthesizerAgent: which agent produces the final merged answer when discuss=true (default first in agents list)
+ *   prompt: the base task/prompt text
+ *   textFiles, imageFiles: shared across all agents for this request
+ *   sessionId, metadata
+ */
+async function runCollaboration(params) {
+  const {
+    agents = ['claude', 'chatgpt'],
+    discuss = false,
+    rounds = 2,
+    synthesizerAgent,
+    prompt,
+    textFiles = [],
+    imageFiles = [],
+    sessionId,
+    metadata = {},
+    temperature = 0.3,
+    max_tokens = 4096,
+  } = params;
+
+  const resolvedSessionId = sessionId || sessionStore.makeSessionId(metadata.claimNumber);
+  const historyBlock = sessionStore.formatHistoryForPrompt(resolvedSessionId, { tab: 'collaboration' });
+
+  sessionStore.appendEntry(resolvedSessionId, {
+    tab: 'collaboration',
+    agent: 'collaboration',
+    role: 'user',
+    prompt,
+    meta: { agents, discuss, rounds },
+  });
+
+  // ---- Mode 1: parallel, independent answers ----
+  if (!discuss) {
+    const results = await Promise.all(agents.map(async (agentKey) => {
+      const turnPrompt = `${historyBlock}\n\nTASK:\n${prompt}`;
+      const res = await callLLM({
+        agent: agentKey,
+        prompt: turnPrompt,
+        textFiles,
+        imageFiles,
+        temperature,
+        max_tokens,
+        metadata,
+      });
+      return { agent: agentKey, agentLabel: AGENT_LABELS[agentKey] || agentKey, content: res.content };
+    }));
+
+    results.forEach(r => {
+      sessionStore.appendEntry(resolvedSessionId, {
+        tab: 'collaboration',
+        agent: r.agent,
+        role: 'assistant',
+        response: r.content,
+      });
+    });
+
+    return { mode: 'parallel', sessionId: resolvedSessionId, results };
+  }
+
+  // ---- Mode 2: sequential discussion + synthesis ----
+  const allTurns = [];
+  for (let round = 1; round <= rounds; round++) {
+    for (const agentKey of agents) {
+      const turnPrompt = buildCollaborationTurnPrompt({
+        basePrompt: prompt,
+        agentLabel: AGENT_LABELS[agentKey] || agentKey,
+        priorTurns: allTurns,
+        roundNumber: round,
+        totalRounds: rounds,
+        historyBlock,
+      });
+
+      const res = await callLLM({
+        agent: agentKey,
+        prompt: turnPrompt,
+        textFiles,
+        imageFiles,
+        temperature,
+        max_tokens,
+        metadata,
+      });
+
+      const turn = { agent: agentKey, agentLabel: AGENT_LABELS[agentKey] || agentKey, round, content: res.content };
+      allTurns.push(turn);
+
+      sessionStore.appendEntry(resolvedSessionId, {
+        tab: 'collaboration',
+        agent: agentKey,
+        role: 'assistant',
+        response: res.content,
+        meta: { round },
+      });
+    }
+  }
+
+  const finalAgent = synthesizerAgent || agents[0];
+  const synthesisPrompt = buildSynthesisPrompt({ basePrompt: prompt, allTurns, historyBlock });
+  const synthesisRes = await callLLM({
+    agent: finalAgent,
+    prompt: synthesisPrompt,
+    textFiles,
+    imageFiles,
+    temperature,
+    max_tokens,
+    metadata,
+  });
+
+  sessionStore.appendEntry(resolvedSessionId, {
+    tab: 'collaboration',
+    agent: finalAgent,
+    role: 'assistant',
+    response: synthesisRes.content,
+    meta: { synthesis: true },
+  });
+
+  return {
+    mode: 'discussion',
+    sessionId: resolvedSessionId,
+    rounds: allTurns,
+    synthesis: { agent: finalAgent, content: synthesisRes.content },
+  };
+}
+
+// ---------------------------------------------------------------
+module.exports = {
+  callLLM,
+  buildScrutinyPrompt,
+  buildPreliminaryPrompt,
+  buildFinalPrompt,
+  extractTextFromFile,
+  // new
+  rewriteToLetterhead,
+  runCollaboration,
+  sessionStore,
 };
