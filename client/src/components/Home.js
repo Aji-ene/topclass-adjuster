@@ -13,8 +13,8 @@ import {
   ListGroup,
   Modal,
 } from 'react-bootstrap';
-import LetterheadRewriteTab from './components/LetterheadRewriteTab';
-import CollaborationTab from './components/CollaborationTab';
+import LetterheadRewriteTab from './LetterheadRewriteTab';
+import CollaborationTab from './CollaborationTab';
 
 const CLASSES_OF_BUSINESS = [
   'Marine',
