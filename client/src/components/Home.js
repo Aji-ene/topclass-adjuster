@@ -13,6 +13,8 @@ import {
   ListGroup,
   Modal,
 } from 'react-bootstrap';
+import LetterheadRewriteTab from './components/LetterheadRewriteTab';
+import CollaborationTab from './components/CollaborationTab';
 
 const CLASSES_OF_BUSINESS = [
   'Marine',
@@ -61,7 +63,7 @@ const DEFAULT_FOCUS_AREAS = [
 ];
 
 function Home() {
-  const [activeTab, setActiveTab] = useState('generate'); // 'generate' | 'training'
+  const [activeTab, setActiveTab] = useState('generate'); // 'generate' | 'training' | 'letterhead' | 'collaboration'
   const [selectedMode, setSelectedMode] = useState('');
   const [selectedAgent, setSelectedAgent] = useState('claude');
 
@@ -144,7 +146,7 @@ function Home() {
     }
   };
 
-  // Headline helpers (same as before)
+  // Headline helpers
   const addHeadline = () => {
     const newId = Math.max(...headlines.map(h => h.id), 0) + 1;
     setHeadlines([...headlines, { id: newId, value: '', subpoints: [] }]);
@@ -1127,6 +1129,16 @@ function Home() {
               </Alert>
             </Card.Body>
           </Card>
+        </Tab>
+
+        {/* LETTERHEAD REWRITE TAB */}
+        <Tab eventKey="letterhead" title={<span>📄 Letterhead Rewrite</span>}>
+          <LetterheadRewriteTab />
+        </Tab>
+
+        {/* COLLABORATION TAB */}
+        <Tab eventKey="collaboration" title={<span>🤝 AI Collaboration</span>}>
+          <CollaborationTab />
         </Tab>
       </Tabs>
 
