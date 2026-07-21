@@ -1,4 +1,3 @@
-
 // server.js
 const express = require('express');
 const cors = require('cors');
@@ -13,7 +12,8 @@ dotenv.config();
 
 // Import routes
 const claimsRoutes = require('./routes/claims');
-const fileRoutes = require('./routes/files');  // Already imported above, remove duplicate
+const fileRoutes = require('./routes/files');
+const collaborationRoutes = require('./routes/collaboration-routes');
 
 // Initialize Express app
 const app = express();
@@ -39,7 +39,8 @@ setInterval(() => {
 
 // API Routes - IMPORTANT: These must come BEFORE the static file serving
 app.use('/api/claims', claimsRoutes);
-app.use('/api/files', fileRoutes);  // Only mount once here
+app.use('/api/files', fileRoutes);
+app.use('/api/files', collaborationRoutes);
 
 // Serve React build - This should come AFTER API routes
 app.use(express.static(path.join(__dirname, '../client/build')));
