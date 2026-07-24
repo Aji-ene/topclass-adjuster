@@ -1,8 +1,56 @@
 const fs = require('fs/promises');
 const path = require('path');
+const sharp = require('sharp');
 const Anthropic = require('@anthropic-ai/sdk');
 const OpenAI = require('openai');
 const sessionStore = require('./sessionStore');
+
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024; // raw buffer cap — keeps base64 (~1.33x) safely under provider limits
+
+function mimeFromExt(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.gif') return 'image/gif';
+  if (ext === '.webp') return 'image/webp';
+  return 'image/jpeg';
+}
+
+// Reads an image and, if it's large, resizes/recompresses it to JPEG so it
+// stays under provider size limits. Small images pass through untouched.
+async function fileToOptimizedImage(filePath) {
+  const original = await fs.readFile(filePath);
+  const ext = path.extname(filePath).toLowerCase();
+
+  if (original.length <= MAX_IMAGE_BYTES && ['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(ext)) {
+    return { base64: original.toString('base64'), mimeType: mimeFromExt(filePath) };
+  }
+
+  try {
+    let quality = 85;
+    const meta = await sharp(original).metadata();
+    let pipeline = sharp(original).rotate(); // bake in EXIF orientation before resizing
+
+    if (meta.width > 1568 || meta.height > 1568) {
+      pipeline = pipeline.resize(1568, 1568, { fit: 'inside', withoutEnlargement: true });
+    }
+
+    let output = await pipeline.jpeg({ quality }).toBuffer();
+
+    while (output.length > MAX_IMAGE_BYTES && quality > 30) {
+      quality -= 15;
+      output = await sharp(original)
+        .rotate()
+        .resize(1568, 1568, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality })
+        .toBuffer();
+    }
+
+    return { base64: output.toString('base64'), mimeType: 'image/jpeg' };
+  } catch (err) {
+    console.error(`Error optimizing image ${filePath}, falling back to original:`, err.message);
+    return { base64: original.toString('base64'), mimeType: mimeFromExt(filePath) };
+  }
+}
 
 // ---------------------------------------------------------------
 // Helper: read text from common insurance/claims file types
@@ -34,20 +82,6 @@ async function extractTextFromFile(filePath) {
 }
 
 // ---------------------------------------------------------------
-async function fileToBase64(filePath) {
-  const buffer = await fs.readFile(filePath);
-  return buffer.toString('base64');
-}
-
-function mimeFromExt(filePath) {
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext === '.png') return 'image/png';
-  if (ext === '.gif') return 'image/gif';
-  if (ext === '.webp') return 'image/webp';
-  return 'image/jpeg';
-}
-
-// ---------------------------------------------------------------
 async function callLLM({ agent, model, prompt, textFiles = [], imageFiles = [], temperature, max_tokens, metadata }) {
   switch (agent) {
     case 'claude':
@@ -76,8 +110,8 @@ async function callClaude({ model, prompt, textFiles, imageFiles, temperature, m
 
   for (const imgPath of imageFiles) {
     try {
-      const base64 = await fileToBase64(imgPath);
-      content.push({ type: 'image', source: { type: 'base64', media_type: mimeFromExt(imgPath), data: base64 } });
+      const { base64, mimeType } = await fileToOptimizedImage(imgPath);
+      content.push({ type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } });
     } catch (err) {
       console.error(`Error processing image ${imgPath}:`, err);
     }
@@ -110,8 +144,8 @@ async function callOpenAI({ model, prompt, textFiles, imageFiles, temperature, m
 
   for (const imgPath of imageFiles) {
     try {
-      const base64 = await fileToBase64(imgPath);
-      userContent.push({ type: 'image_url', image_url: { url: `data:${mimeFromExt(imgPath)};base64,${base64}` } });
+      const { base64, mimeType } = await fileToOptimizedImage(imgPath);
+      userContent.push({ type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } });
     } catch (err) {
       console.error(`Error processing image ${imgPath}:`, err);
     }
@@ -146,8 +180,8 @@ async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max
 
   for (const imgPath of imageFiles) {
     try {
-      const base64 = await fileToBase64(imgPath);
-      userContent.push({ type: 'image_url', image_url: { url: `data:${mimeFromExt(imgPath)};base64,${base64}` } });
+      const { base64, mimeType } = await fileToOptimizedImage(imgPath);
+      userContent.push({ type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } });
     } catch (err) {
       console.error(`Error processing image ${imgPath}:`, err);
     }
@@ -189,8 +223,8 @@ async function callGemini({ model, prompt, textFiles, imageFiles, temperature, m
 
     for (const imgPath of imageFiles) {
       try {
-        const base64 = await fileToBase64(imgPath);
-        parts.push({ inlineData: { mimeType: mimeFromExt(imgPath), data: base64 } });
+        const { base64, mimeType } = await fileToOptimizedImage(imgPath);
+        parts.push({ inlineData: { mimeType, data: base64 } });
       } catch (err) {
         console.error(`Error processing image ${imgPath}:`, err);
       }
@@ -424,15 +458,6 @@ This is a final report for insurers and reinsurers. Write everything in reported
 
 // =================================================================
 // NEW: LETTERHEAD REWRITE
-//
-// Takes an official letterhead template (as text and/or image, since
-// letterheads are often a scanned/branded PDF or DOCX with a logo)
-// plus a field report (and optionally policy/endorsement/other docs
-// and photos), and rewrites or extends the field report content into
-// the letterhead's format and voice. Supports free-form instructions
-// and is designed to be called repeatedly in the same sessionId so
-// the user can go back and forth ("also add a paragraph on X",
-// "reference photo 3 more specifically") without re-uploading files.
 // =================================================================
 
 function buildLetterheadPrompt({ metadata, historyBlock, isFollowUp }) {
@@ -479,11 +504,6 @@ If anything about the letterhead format or the requested changes is ambiguous, e
 
 /**
  * @param {object} params
- *   agent, model, sessionId (claimNumber or generated id),
- *   letterheadFiles (text/pdf/docx of the template),
- *   letterheadImages (if the letterhead itself is an image/scan),
- *   fieldReportFiles, policyFiles, endorsementFiles, additionalFiles,
- *   photoFiles, instructions, metadata (claim fields), isFollowUp
  */
 async function rewriteToLetterhead(params) {
   const {
@@ -514,8 +534,6 @@ async function rewriteToLetterhead(params) {
     isFollowUp,
   });
 
-  // Log the user's turn before calling the model, so a crash mid-call
-  // still leaves a record of what was asked.
   sessionStore.appendEntry(resolvedSessionId, {
     tab: 'letterhead',
     agent,
@@ -549,16 +567,6 @@ async function rewriteToLetterhead(params) {
 
 // =================================================================
 // NEW: MULTI-AGENT COLLABORATION
-//
-// Runs a request across some or all of the configured agents
-// (Claude, ChatGPT, Grok, Gemini). Two modes:
-//   - discuss = false: each selected agent answers the same prompt
-//     independently ("single-shot" / parallel mode) and results are
-//     returned side by side for the user to compare or merge.
-//   - discuss = true: agents run in sequence, each one seeing the
-//     prior agents' responses in the same round, for N rounds, then
-//     a final synthesis pass produces one merged answer. This lets
-//     e.g. Claude critique ChatGPT's draft, Grok flag a gap, etc.
 // =================================================================
 
 function buildCollaborationTurnPrompt({ basePrompt, agentLabel, priorTurns, roundNumber, totalRounds, historyBlock }) {
@@ -612,13 +620,6 @@ const AGENT_LABELS = { claude: 'Claude', chatgpt: 'ChatGPT', grok: 'Grok', gemin
 
 /**
  * @param {object} params
- *   agents: array of agent keys to include, e.g. ['claude','chatgpt']
- *   discuss: boolean — false = parallel independent answers, true = sequential discussion + synthesis
- *   rounds: number of discussion rounds when discuss=true (default 2)
- *   synthesizerAgent: which agent produces the final merged answer when discuss=true (default first in agents list)
- *   prompt: the base task/prompt text
- *   textFiles, imageFiles: shared across all agents for this request
- *   sessionId, metadata
  */
 async function runCollaboration(params) {
   const {
@@ -745,7 +746,6 @@ module.exports = {
   buildPreliminaryPrompt,
   buildFinalPrompt,
   extractTextFromFile,
-  // new
   rewriteToLetterhead,
   runCollaboration,
   sessionStore,
