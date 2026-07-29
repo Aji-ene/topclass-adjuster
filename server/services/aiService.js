@@ -118,7 +118,7 @@ async function callClaude({ model, prompt, textFiles, imageFiles, temperature, m
   }
 
   const msg = await anthropic.messages.create({
-    model: model || 'claude-sonnet-4-6',
+    model: model || 'claude-sonnet-5',
     max_tokens: max_tokens || 4096,
     temperature: temperature ?? 0.3,
     messages: [{ role: 'user', content }],
@@ -154,7 +154,7 @@ async function callOpenAI({ model, prompt, textFiles, imageFiles, temperature, m
   messages.push({ role: 'user', content: userContent });
 
   const completion = await openai.chat.completions.create({
-    model: model || 'gpt-4o',
+    model: model || 'gpt-5',
     messages,
     temperature: temperature ?? 0.3,
     max_tokens: max_tokens || 4096,
@@ -190,7 +190,7 @@ async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max
   messages.push({ role: 'user', content: userContent });
 
   const completion = await xai.chat.completions.create({
-    model: model || 'grok-4',
+    model: model || 'grok-4.5',
     messages,
     temperature: temperature ?? 0.3,
     max_tokens: max_tokens || 4096,
@@ -206,13 +206,15 @@ async function callGemini({ model, prompt, textFiles, imageFiles, temperature, m
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY, apiVersion: 'v1beta' });
 
     const modelMap = {
-      'gemini-1.5-pro': 'gemini-2.5-pro',
-      'gemini-3-pro': 'gemini-3-pro-preview',
-      'gemini-3-flash': 'gemini-3-flash-preview',
-      'gemini-2.5-pro': 'gemini-2.5-pro',
-      'gemini-3-flash-preview': 'gemini-3-flash-preview',
+      'gemini-1.5-pro': 'gemini-3.1-pro-preview',  
+      'gemini-3-pro': 'gemini-3.1-pro-preview',
+      'gemini-3-flash': 'gemini-3.5-flash',
+      'gemini-2.5-pro': 'gemini-3.1-pro-preview',
+      'gemini-3-flash-preview': 'gemini-3.5-flash',
+      'gemini-3.1-pro-preview': 'gemini-3.1-pro-preview',
+      'gemini-3.5-flash': 'gemini-3.5-flash',
     };
-    const targetModel = modelMap[model] || 'gemini-3-flash-preview';
+    const targetModel = modelMap[model] || 'gemini-3.5-flash';
 
     const parts = [{ text: prompt }];
 
