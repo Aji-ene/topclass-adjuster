@@ -1,9 +1,9 @@
 const fs = require('fs/promises');
 const path = require('path');
 const sharp = require('sharp');
-const Anthropic = require('@anthropic-ai/sdk');
 const OpenAI = require('openai');
 const sessionStore = require('./sessionStore');
+const anthropic = require('./anthropicClient'); // shared client — strips deprecated temperature/top_p/top_k centrally, see anthropicClient.js
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024; // raw buffer cap — keeps base64 (~1.33x) safely under provider limits
 
@@ -82,10 +82,40 @@ async function extractTextFromFile(filePath) {
 }
 
 // ---------------------------------------------------------------
+// Sampling-parameter deprecation guard (same as llmService.js)
+// ---------------------------------------------------------------
+// Anthropic deprecated temperature/top_p/top_k outright for models released
+// after Opus 4.6 (Sonnet 5, Opus 4.8+ — the API 400s the instant the field
+// is present, regardless of value), so Claude never sends it below at all;
+// the shared `anthropicClient` also strips it as a second line of defense.
+//
+// OpenAI/xAI/Gemini haven't deprecated it as of this writing, but rather
+// than hardcode a model-name allowlist that goes stale the next time any
+// provider ships a new model, each of those three calls retries once
+// without temperature if the provider ever responds with this specific
+// class of 400.
+function isTemperatureDeprecationError(err) {
+  const msg = (err?.message || err?.error?.message || '').toLowerCase();
+  return msg.includes('temperature') && (msg.includes('deprecat') || msg.includes('not support') || msg.includes('unsupported'));
+}
+
+async function withTemperatureFallback(makeRequest) {
+  try {
+    return await makeRequest(true); // first attempt: include temperature
+  } catch (err) {
+    if (isTemperatureDeprecationError(err)) {
+      console.warn('Provider rejected temperature parameter — retrying without it.');
+      return await makeRequest(false); // retry: omit temperature
+    }
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------
 async function callLLM({ agent, model, prompt, textFiles = [], imageFiles = [], temperature, max_tokens, metadata }) {
   switch (agent) {
     case 'claude':
-      return callClaude({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata });
+      return callClaude({ model, prompt, textFiles, imageFiles, max_tokens, metadata });
     case 'chatgpt':
       return callOpenAI({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata });
     case 'grok':
@@ -98,9 +128,11 @@ async function callLLM({ agent, model, prompt, textFiles = [], imageFiles = [], 
 }
 
 // ---------------------------------------------------------------
-async function callClaude({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata }) {
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
+// NOTE: no `temperature` parameter at all — Sonnet 5 / Opus 4.8+ reject
+// the field outright. If you ever point `model` at an older Claude model
+// that still accepts it, omitting it just means the provider's default
+// sampling is used, which Anthropic now recommends anyway.
+async function callClaude({ model, prompt, textFiles, imageFiles, max_tokens, metadata }) {
   const content = [{ type: 'text', text: prompt }];
 
   for (const filePath of textFiles) {
@@ -120,7 +152,6 @@ async function callClaude({ model, prompt, textFiles, imageFiles, temperature, m
   const msg = await anthropic.messages.create({
     model: model || 'claude-sonnet-5',
     max_tokens: max_tokens || 4096,
-    temperature: temperature ?? 0.3,
     messages: [{ role: 'user', content }],
   });
 
@@ -128,6 +159,11 @@ async function callClaude({ model, prompt, textFiles, imageFiles, temperature, m
 }
 
 // ---------------------------------------------------------------
+// NOTE: max_tokens is deprecated on OpenAI's chat completions endpoint in
+// favor of max_completion_tokens (max_tokens still silently works on some
+// older models but is rejected outright on others) — using the current
+// param name here so this doesn't quietly break the next time OpenAI
+// tightens enforcement.
 async function callOpenAI({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -153,17 +189,22 @@ async function callOpenAI({ model, prompt, textFiles, imageFiles, temperature, m
 
   messages.push({ role: 'user', content: userContent });
 
-  const completion = await openai.chat.completions.create({
-    model: model || 'gpt-5.2',
-    messages,
-    temperature: temperature ?? 0.3,
-    max_tokens: max_tokens || 4096,
-  });
+  const completion = await withTemperatureFallback((includeTemperature) =>
+    openai.chat.completions.create({
+      model: model || 'gpt-5.2',
+      messages,
+      ...(includeTemperature ? { temperature: temperature ?? 0.3 } : {}),
+      max_completion_tokens: max_tokens || 4096,
+    })
+  );
 
   return { content: completion.choices[0].message.content };
 }
 
 // ---------------------------------------------------------------
+// xAI's own Chat Completions docs still document `max_tokens` natively
+// (it isn't strictly the OpenAI API, just SDK-compatible), so this one is
+// left as max_tokens rather than guessed at.
 async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata }) {
   const xai = new OpenAI({ apiKey: process.env.XAI_API_KEY, baseURL: 'https://api.x.ai/v1' });
 
@@ -189,12 +230,14 @@ async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max
 
   messages.push({ role: 'user', content: userContent });
 
-  const completion = await xai.chat.completions.create({
-    model: model || 'grok-4.5',
-    messages,
-    temperature: temperature ?? 0.3,
-    max_tokens: max_tokens || 4096,
-  });
+  const completion = await withTemperatureFallback((includeTemperature) =>
+    xai.chat.completions.create({
+      model: model || 'grok-4.5',
+      messages,
+      ...(includeTemperature ? { temperature: temperature ?? 0.3 } : {}),
+      max_tokens: max_tokens || 4096,
+    })
+  );
 
   return { content: completion.choices[0].message.content };
 }
@@ -232,20 +275,20 @@ async function callGemini({ model, prompt, textFiles, imageFiles, temperature, m
       }
     }
 
-    const config = {
-      temperature: temperature ?? 0.3,
-      maxOutputTokens: max_tokens || 4096,
-    };
-
-    // Enable high reasoning effort for pro models
-    if (targetModel.includes('pro')) {
-      config.thinkingConfig = { thinkingBudget: 2048 };
-    }
-
-    const result = await ai.models.generateContent({
-      model: targetModel,
-      contents: [{ role: 'user', parts }],
-      config,
+    const result = await withTemperatureFallback((includeTemperature) => {
+      const config = {
+        ...(includeTemperature ? { temperature: temperature ?? 0.3 } : {}),
+        maxOutputTokens: max_tokens || 4096,
+      };
+      // Enable high reasoning effort for pro models
+      if (targetModel.includes('pro')) {
+        config.thinkingConfig = { thinkingBudget: 2048 };
+      }
+      return ai.models.generateContent({
+        model: targetModel,
+        contents: [{ role: 'user', parts }],
+        config,
+      });
     });
 
     return { content: result.response.text() };
