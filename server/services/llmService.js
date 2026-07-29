@@ -1,9 +1,9 @@
 const fs = require('fs/promises');
 const path = require('path');
 const sharp = require('sharp');
-const Anthropic = require('@anthropic-ai/sdk');
 const OpenAI = require('openai');
 const sessionStore = require('./sessionStore');
+const anthropic = require('./anthropicClient'); // shared client — strips deprecated temperature/top_p/top_k centrally, see anthropicClient.js
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024; // raw buffer cap — keeps base64 (~1.33x) safely under provider limits
 
@@ -138,8 +138,6 @@ async function callLLM({ agent, model, prompt, textFiles = [], imageFiles = [], 
 // temperature, that's fine — omitting it just means the provider's
 // default sampling is used, which Anthropic now recommends anyway.
 async function callClaude({ model, prompt, textFiles, imageFiles, max_tokens, metadata }) {
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
   const content = [{ type: 'text', text: prompt }];
 
   for (const filePath of textFiles) {
