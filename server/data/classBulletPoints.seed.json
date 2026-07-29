@@ -1,1 +1,52 @@
-jj
+{
+  "_comment": "Preset headline/subpoint sets per Class of Business. Structure matches Home.js's `headlines` state exactly: [{ id, value, subpoints: [{ id, value }] }]. GIT is populated below from _FINAL_REPORT_INDORAMA_UF_85.docx. All other classes start empty — the user fills and saves them once via the new 'Save as class default' action (see classBullets.js route), after which they load here too.",
+
+  "GIT": [
+    { "id": 1, "value": "THE ASSURED", "subpoints": [] },
+    { "id": 2, "value": "VESSEL / CONVEYING TRUCK", "subpoints": [] },
+    { "id": 3, "value": "TRUCK", "subpoints": [] },
+    { "id": 4, "value": "DESCRIPTION OF CARGO", "subpoints": [] },
+    { "id": 5, "value": "NATURE OF PACKING OF CONSIGNMENT", "subpoints": [] },
+    { "id": 6, "value": "CIRCUMSTANCE OF THE LOSS", "subpoints": [] },
+    { "id": 7, "value": "NATURE OF THE LOSS", "subpoints": [] },
+    { "id": 8, "value": "PHOTOGRAPHS", "subpoints": [] },
+    { "id": 9, "value": "EXTENT OF DAMAGE", "subpoints": [] },
+    {
+      "id": 10,
+      "value": "POLICY TERMS AND CONDITIONS",
+      "subpoints": [
+        { "id": 1, "value": "Scope of Cover" },
+        { "id": 2, "value": "No Premium No Cover" },
+        { "id": 3, "value": "Lien Clause" },
+        { "id": 4, "value": "Policy Excess" },
+        { "id": 5, "value": "Subrogation Rights" },
+        { "id": 6, "value": "Other Insurances" },
+        { "id": 7, "value": "Breach of Policy Conditions" }
+      ]
+    },
+    { "id": 11, "value": "THE ASSURED'S CLAIM", "subpoints": [] },
+    { "id": 12, "value": "BASIS OF VALUATION", "subpoints": [] },
+    { "id": 13, "value": "SALVAGE", "subpoints": [] },
+    { "id": 14, "value": "CONSIDERATION OF LIABILITY", "subpoints": [] },
+    { "id": 15, "value": "ADJUSTMENT OF CLAIM", "subpoints": [] },
+    { "id": 16, "value": "DISCHARGE OF CLAIM", "subpoints": [] },
+    { "id": 17, "value": "LOSS ADJUSTERS FEE AND EXPENSES", "subpoints": [] },
+    { "id": 18, "value": "SUMMARY OF ADJUSTMENT AND ADJUSTERS BILL", "subpoints": [] },
+    { "id": 19, "value": "METHOD OF SETTLEMENT", "subpoints": [] },
+    { "id": 20, "value": "RISK IMPROVEMENT", "subpoints": [] },
+    { "id": 21, "value": "ATTACHMENTS TO THE FINAL REPORT", "subpoints": [] }
+  ],
+
+  "Marine": [],
+  "Fire & Special Peril": [],
+  "Oil & Gas": [],
+  "Professional Indemnity": [],
+  "Money": [],
+  "Burglary": [],
+  "Theft": [],
+  "Machinery Breakdown": [],
+  "Fraud": [],
+  "Business Interruption": [],
+  "Fidelity Guarantee": [],
+  "Property": []
+}
