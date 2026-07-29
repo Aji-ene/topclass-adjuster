@@ -35,6 +35,7 @@ const cpUpload = upload.fields([
   { name: 'policyDocument', maxCount: 1 },
   { name: 'endorsement', maxCount: 1 },
   { name: 'additionalDocs', maxCount: 12 },
+  { name: 'receipts', maxCount: 12 },
   { name: 'photos', maxCount: 50 },
 ]);
 
