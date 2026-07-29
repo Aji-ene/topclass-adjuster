@@ -12,8 +12,9 @@ import {
   Tab,
   ListGroup,
   Modal,
+  Spinner,
+  ButtonGroup,
 } from 'react-bootstrap';
-import LetterheadRewriteTab from './LetterheadRewriteTab';
 import CollaborationTab from './CollaborationTab';
 
 const CLASSES_OF_BUSINESS = [
@@ -63,7 +64,8 @@ const DEFAULT_FOCUS_AREAS = [
 ];
 
 function Home() {
-  const [activeTab, setActiveTab] = useState('generate'); // 'generate' | 'training' | 'letterhead' | 'collaboration'
+  // 'generate' is now the single merged workflow tab; 'collaboration' is unchanged.
+  const [activeTab, setActiveTab] = useState('generate');
   const [selectedMode, setSelectedMode] = useState('');
   const [selectedAgent, setSelectedAgent] = useState('claude');
 
@@ -96,7 +98,15 @@ function Home() {
   const [endorsement, setEndorsement] = useState(null);
   const [additionalDocs, setAdditionalDocs] = useState([]);
   const [supportingDocs, setSupportingDocs] = useState([]);
+  const [receipts, setReceipts] = useState([]);
   const [photos, setPhotos] = useState([]);
+
+  // Field report: upload OR link
+  const [fieldReportMode, setFieldReportMode] = useState('upload'); // 'upload' | 'link'
+  const [fieldReportLinkUrl, setFieldReportLinkUrl] = useState('');
+  const [fieldReportLinkText, setFieldReportLinkText] = useState(null);
+  const [resolvingLink, setResolvingLink] = useState(false);
+  const [linkStatus, setLinkStatus] = useState(null); // { ok, message }
 
   const [excludePhotosFromAI, setExcludePhotosFromAI] = useState(false);
   const [customScrutinyPrompt, setCustomScrutinyPrompt] = useState('');
@@ -105,8 +115,7 @@ function Home() {
   const [error, setError] = useState(null);
   const [generatedReport, setGeneratedReport] = useState(null);
 
-  // Training/Reference Reports State
-  const [trainingReports, setTrainingReports] = useState([]);
+  // Training/Reference Reports State — Step 1 of the merged flow
   const [uploadingTraining, setUploadingTraining] = useState(false);
   const [trainingFiles, setTrainingFiles] = useState([]);
   const [trainingMetadata, setTrainingMetadata] = useState({
@@ -119,6 +128,28 @@ function Home() {
   const [showTrainingModal, setShowTrainingModal] = useState(false);
   const [loadedTrainingReports, setLoadedTrainingReports] = useState([]);
   const [useTraining, setUseTraining] = useState(true);
+  const [trainingStepOpen, setTrainingStepOpen] = useState(true);
+
+  // Class bullet-point presets (auto-fill + permanent save/clear)
+  const [savingPreset, setSavingPreset] = useState(false);
+  const [clearingPreset, setClearingPreset] = useState(false);
+  const [presetMsg, setPresetMsg] = useState(null);
+
+  // Review / rework loop
+  const [reportAccepted, setReportAccepted] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [feedback, setFeedback] = useState('');
+  const [reworking, setReworking] = useState(false);
+  const [reworkError, setReworkError] = useState(null);
+
+  // Letterhead finalization — merged in as the last step instead of a tab
+  const [letterheadTemplate, setLetterheadTemplate] = useState(null);
+  const [letterheadLoading, setLetterheadLoading] = useState(false);
+  const [letterheadError, setLetterheadError] = useState(null);
+  const [letterheadResult, setLetterheadResult] = useState(null);
+  const [letterheadSessionId, setLetterheadSessionId] = useState(null);
+
+  const API_URL = process.env.REACT_APP_API_URL || '';
 
   useEffect(() => {
     if (classOfBusiness) {
@@ -128,6 +159,24 @@ function Home() {
     }
   }, [classOfBusiness]);
 
+  // Auto-fill headlines/subpoints from the saved class preset (GIT ships
+  // pre-populated from the Indorama final report; other classes fill in
+  // once someone saves a default for them — see saveClassBulletsAsDefault).
+  useEffect(() => {
+    if (!classOfBusiness) return;
+    setPresetMsg(null);
+    fetch(`${API_URL}/api/class-bullets/${encodeURIComponent(classOfBusiness)}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success && data.headlines?.length) {
+          setHeadlines(data.headlines);
+        }
+        // else: nothing saved yet for this class — leave current headlines as-is.
+      })
+      .catch(() => {}); // preset is a convenience, not required
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [classOfBusiness]);
+
   // Load training reports on component mount
   useEffect(() => {
     fetchTrainingReports();
@@ -135,7 +184,6 @@ function Home() {
 
   const fetchTrainingReports = async () => {
     try {
-      const API_URL = process.env.REACT_APP_API_URL || '';
       const response = await fetch(`${API_URL}/api/files/training-reports`);
       const data = await response.json();
       if (data.success) {
@@ -191,6 +239,46 @@ function Home() {
     }));
   };
 
+  // Permanent per-class bullet-point presets
+  const saveClassBulletsAsDefault = async () => {
+    if (!classOfBusiness) return;
+    setSavingPreset(true);
+    setPresetMsg(null);
+    try {
+      const res = await fetch(`${API_URL}/api/class-bullets/${encodeURIComponent(classOfBusiness)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ headlines }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message);
+      setPresetMsg({ ok: true, text: `Saved as the default bullet set for ${classOfBusiness}.` });
+    } catch (err) {
+      setPresetMsg({ ok: false, text: err.message });
+    } finally {
+      setSavingPreset(false);
+    }
+  };
+
+  const clearClassBulletsDefault = async () => {
+    if (!classOfBusiness) return;
+    if (!window.confirm(`Remove the saved default bullet set for ${classOfBusiness}?`)) return;
+    setClearingPreset(true);
+    setPresetMsg(null);
+    try {
+      const res = await fetch(`${API_URL}/api/class-bullets/${encodeURIComponent(classOfBusiness)}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message);
+      setPresetMsg({ ok: true, text: `Cleared the saved default for ${classOfBusiness}.` });
+    } catch (err) {
+      setPresetMsg({ ok: false, text: err.message });
+    } finally {
+      setClearingPreset(false);
+    }
+  };
+
   // Interview field helpers
   const addInterviewField = () => {
     const newId = Math.max(...interviewFields.map(f => f.id), 0) + 1;
@@ -202,12 +290,12 @@ function Home() {
   };
 
   const updateInterviewField = (id, field, value) => {
-    setInterviewFields(interviewFields.map(f => 
+    setInterviewFields(interviewFields.map(f =>
       f.id === id ? { ...f, [field]: value } : f
     ));
   };
 
-  const hasInterviewsSelected = headlines.some(h => 
+  const hasInterviewsSelected = headlines.some(h =>
     h.value.toUpperCase().includes('INTERVIEW')
   );
 
@@ -230,6 +318,35 @@ function Home() {
 
   const removePhoto = (index) => () => {
     setPhotos(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // Field report link resolution
+  const resolveFieldReportLink = async () => {
+    if (!fieldReportLinkUrl.trim()) return;
+    setResolvingLink(true);
+    setLinkStatus(null);
+    try {
+      const res = await fetch(`${API_URL}/api/files/fetch-link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: fieldReportLinkUrl.trim(), agent: selectedAgent }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || 'Could not read that link');
+      setFieldReportLinkText(data.text);
+      setFieldReport(null);
+      setLinkStatus({
+        ok: true,
+        message: data.source?.startsWith('ai-agent-fallback')
+          ? `Read via ${selectedAgent} (page needed AI extraction)`
+          : 'Field report read successfully',
+      });
+    } catch (err) {
+      setFieldReportLinkText(null);
+      setLinkStatus({ ok: false, message: err.message });
+    } finally {
+      setResolvingLink(false);
+    }
   };
 
   // Training report upload
@@ -258,7 +375,6 @@ function Home() {
       trainingFiles.forEach(file => formData.append('trainingReports', file));
       formData.append('metadata', JSON.stringify(trainingMetadata));
 
-      const API_URL = process.env.REACT_APP_API_URL || '';
       const response = await fetch(`${API_URL}/api/files/upload-training`, {
         method: 'POST',
         body: formData,
@@ -267,7 +383,7 @@ function Home() {
       const data = await response.json();
       if (!data.success) throw new Error(data.message || 'Upload failed');
 
-      alert(`Successfully uploaded ${trainingFiles.length} training report(s)!`);
+      alert(`Successfully uploaded ${trainingFiles.length} training report(s)! The system will use it to match style and structure.`);
       setTrainingFiles([]);
       setTrainingMetadata({
         reportType: 'scrutiny',
@@ -276,7 +392,8 @@ function Home() {
         author: '',
         yearWritten: new Date().getFullYear(),
       });
-      fetchTrainingReports(); // Reload training reports
+      fetchTrainingReports();
+      setTrainingStepOpen(false); // collapse Step 1 once assimilated; user can reopen to add more
     } catch (err) {
       setError(err.message || 'Error uploading training reports');
     } finally {
@@ -290,7 +407,6 @@ function Home() {
     }
 
     try {
-      const API_URL = process.env.REACT_APP_API_URL || '';
       const response = await fetch(`${API_URL}/api/files/training-reports/${reportId}`, {
         method: 'DELETE',
       });
@@ -310,7 +426,9 @@ function Home() {
     if (!selectedMode) return setError('Please select a mode');
     if (!selectedAgent) return setError('Please select an AI agent');
     if (!classOfBusiness) return setError('Please select Class of Business');
-    if (!fieldReport) return setError('Please upload the Field Report');
+    if (!fieldReport && !fieldReportLinkText) {
+      return setError('Please upload the Field Report or provide a link to it');
+    }
 
     if (selectedMode === 'final' && !policyDocument) {
       return setError('Please upload the Policy Document for Final Report');
@@ -339,7 +457,7 @@ function Home() {
     }
 
     if (hasInterviewsSelected) {
-      formData.append('interviews', JSON.stringify(interviewFields.filter(f => 
+      formData.append('interviews', JSON.stringify(interviewFields.filter(f =>
         f.name.trim() || f.conversation.trim()
       )));
     }
@@ -360,27 +478,40 @@ function Home() {
     formData.append('headlines', JSON.stringify(structuredHeadlines));
     formData.append('excludePhotosFromAI', excludePhotosFromAI);
 
-    formData.append('questionnaire', fieldReport);
+    // Field report: file OR resolved link text (backend: accept either
+    // `questionnaire` file or a `fieldReportText` string — see
+    // IMPLEMENTATION_PLAN.md §2 for the reportGenerator.js change needed).
+    if (fieldReport) {
+      formData.append('questionnaire', fieldReport);
+    } else if (fieldReportLinkText) {
+      formData.append('fieldReportText', fieldReportLinkText);
+      formData.append('fieldReportSourceUrl', fieldReportLinkUrl.trim());
+    }
 
     if (policyDocument) {
       formData.append('policyDocument', policyDocument);
     }
-    
+
     if (endorsement) {
       formData.append('endorsement', endorsement);
     }
 
-    [...additionalDocs, ...supportingDocs].forEach(file => 
+    [...additionalDocs, ...supportingDocs].forEach(file =>
       formData.append('additionalDocs', file)
     );
+
+    // Receipts sent under their own field — see route/files.js multer
+    // config in IMPLEMENTATION_PLAN.md (add { name: 'receipts', maxCount: 12 }).
+    receipts.forEach(file => formData.append('receipts', file));
 
     photos.forEach(photo => formData.append('photos', photo));
 
     setLoading(true);
     setError(null);
+    setReportAccepted(false);
+    setLetterheadResult(null);
 
     try {
-      const API_URL = process.env.REACT_APP_API_URL || '';
       const response = await fetch(`${API_URL}/api/files/process-files`, {
         method: 'POST',
         body: formData,
@@ -394,6 +525,41 @@ function Home() {
       setError(err.message || 'Error generating report');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Rework loop — send feedback, get a revised report back in place
+  const submitRework = async () => {
+    if (!feedback.trim()) return;
+    setReworking(true);
+    setReworkError(null);
+    try {
+      const res = await fetch(`${API_URL}/api/files/rework`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currentReport: generatedReport,
+          feedback: feedback.trim(),
+          aiAgent: selectedAgent,
+          reportType: selectedMode === 'preliminary' ? 'interim' : selectedMode,
+          classOfBusiness,
+          claimNumber,
+          policyNumber,
+          insuredName,
+          dateOfLoss,
+          locationOfLoss,
+          lossDescription,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || 'Rework failed');
+      setGeneratedReport(data.report);
+      setFeedback('');
+      setShowFeedback(false);
+    } catch (err) {
+      setReworkError(err.message);
+    } finally {
+      setReworking(false);
     }
   };
 
@@ -413,7 +579,6 @@ function Home() {
     if (!generatedReport) return;
 
     try {
-      const API_URL = process.env.REACT_APP_API_URL || '';
       const res = await fetch(`${API_URL}/api/files/export/docx`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -450,11 +615,103 @@ function Home() {
     }
   };
 
+  // Letterhead finalization — merged in here instead of a separate tab.
+  // Reuses the existing /api/files/letterhead-rewrite endpoint by turning
+  // the accepted report text into a file client-side, so no backend
+  // change is required for this step specifically.
+  const submitLetterhead = async () => {
+    if (!letterheadTemplate) {
+      setLetterheadError('Please upload your letterhead template.');
+      return;
+    }
+    setLetterheadLoading(true);
+    setLetterheadError(null);
+    try {
+      const reportFile = new File(
+        [generatedReport],
+        `${selectedMode}_report_${claimNumber || 'generated'}.txt`,
+        { type: 'text/plain' }
+      );
+      const formData = new FormData();
+      formData.append('letterhead', letterheadTemplate);
+      formData.append('fieldReports', reportFile);
+      formData.append('agent', selectedAgent);
+      formData.append(
+        'instructions',
+        'Place this accepted, final report onto the letterhead exactly as written — apply the letterhead formatting only, do not alter the wording.'
+      );
+      formData.append('isFollowUp', 'false');
+      formData.append('metadata', JSON.stringify({
+        claimNumber, policyNumber, insuredName, dateOfLoss, locationOfLoss, classOfBusiness,
+      }));
+
+      const res = await fetch(`${API_URL}/api/files/letterhead-rewrite`, {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || 'Failed to place on letterhead');
+
+      setLetterheadSessionId(data.sessionId);
+      setLetterheadResult(data.report);
+    } catch (err) {
+      setLetterheadError(err.message || 'Error placing report on letterhead');
+    } finally {
+      setLetterheadLoading(false);
+    }
+  };
+
+  const downloadLetterheadAsTxt = () => {
+    if (!letterheadResult) return;
+    const blob = new Blob([letterheadResult], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `letterhead_${selectedMode}_report_${claimNumber || 'final'}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadLetterheadAsDocx = async () => {
+    if (!letterheadResult) return;
+    try {
+      const res = await fetch(`${API_URL}/api/files/export/docx`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reportText: letterheadResult,
+          metadata: {
+            reportType: selectedMode === 'preliminary' ? 'interim' : selectedMode,
+            aiAgent: selectedAgent,
+            claimNumber,
+            policyNumber,
+            insuredName,
+            dateOfLoss,
+            locationOfLoss,
+            classOfBusiness,
+            generatedAt: new Date().toISOString(),
+            letterhead: true,
+          }
+        })
+      });
+      if (!res.ok) throw new Error(`Server responded ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `letterhead_${selectedMode}_report_${claimNumber || 'final'}.docx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setLetterheadError('DOCX download failed: ' + err.message);
+    }
+  };
+
   // Filter training reports by current selection
   const relevantTrainingReports = loadedTrainingReports.filter(report => {
     if (!classOfBusiness) return false;
     const reportType = selectedMode === 'preliminary' ? 'interim' : selectedMode;
-    return report.classOfBusiness === classOfBusiness && 
+    return report.classOfBusiness === classOfBusiness &&
            (!reportType || report.reportType === reportType);
   });
 
@@ -463,14 +720,187 @@ function Home() {
       <h1 className="mb-4 text-center">Topclass Adjusters Claims Processing</h1>
 
       <Tabs activeKey={activeTab} onSelect={(k) => setActiveTab(k)} className="mb-4">
-        {/* GENERATE REPORT TAB */}
+        {/* MERGED WORKFLOW TAB */}
         <Tab eventKey="generate" title="Generate Report">
+
+          {/* STEP 1 — TRAINING REPORTS (assimilated first) */}
+          <Card className="mb-4 border-primary">
+            <Card.Body>
+              <div
+                className="d-flex justify-content-between align-items-center"
+                style={{ cursor: 'pointer' }}
+                onClick={() => setTrainingStepOpen(o => !o)}
+              >
+                <h3 className="mb-0">
+                  Step 1 · Training Reports{' '}
+                  <Badge bg="secondary">{loadedTrainingReports.length} on file</Badge>
+                </h3>
+                <Button variant="link" size="sm">{trainingStepOpen ? 'Collapse' : 'Expand'}</Button>
+              </div>
+
+              {trainingStepOpen && (
+                <>
+                  <Alert variant="info" className="mt-3">
+                    <strong>How it works:</strong> Upload your existing high-quality reports first.
+                    The system assimilates them — learning writing style, structure, terminology,
+                    and table formatting — before you move on to building a new report below.
+                  </Alert>
+
+                  <Card className="mb-4 border-primary">
+                    <Card.Body>
+                      <h5>Upload New Training Reports</h5>
+
+                      <Form.Group className="mb-3">
+                        <Form.Label>Select Report Files</Form.Label>
+                        <Form.Control
+                          type="file"
+                          multiple
+                          accept=".docx,.pdf,.txt"
+                          onChange={handleTrainingFilesChange}
+                        />
+                        {trainingFiles.length > 0 && (
+                          <div className="mt-2">
+                            <strong>Selected Files:</strong>
+                            {trainingFiles.map((file, idx) => (
+                              <Badge key={idx} bg="secondary" className="me-2 mb-1 d-block">
+                                {file.name}
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                      </Form.Group>
+
+                      <Row>
+                        <Col md={6}>
+                          <Form.Group className="mb-3">
+                            <Form.Label>Report Type</Form.Label>
+                            <Form.Select
+                              value={trainingMetadata.reportType}
+                              onChange={e => setTrainingMetadata({ ...trainingMetadata, reportType: e.target.value })}
+                            >
+                              <option value="scrutiny">Scrutiny</option>
+                              <option value="interim">Preliminary/Interim</option>
+                              <option value="final">Final</option>
+                            </Form.Select>
+                          </Form.Group>
+                        </Col>
+                        <Col md={6}>
+                          <Form.Group className="mb-3">
+                            <Form.Label>Class of Business</Form.Label>
+                            <Form.Select
+                              value={trainingMetadata.classOfBusiness}
+                              onChange={e => setTrainingMetadata({ ...trainingMetadata, classOfBusiness: e.target.value })}
+                            >
+                              <option value="">-- Select Class --</option>
+                              {CLASSES_OF_BUSINESS.map(cls => (
+                                <option key={cls} value={cls}>{cls}</option>
+                              ))}
+                            </Form.Select>
+                          </Form.Group>
+                        </Col>
+                      </Row>
+
+                      <Row>
+                        <Col md={6}>
+                          <Form.Group className="mb-3">
+                            <Form.Label>Author/Adjuster Name (Optional)</Form.Label>
+                            <Form.Control
+                              value={trainingMetadata.author}
+                              onChange={e => setTrainingMetadata({ ...trainingMetadata, author: e.target.value })}
+                              placeholder="e.g., John Smith"
+                            />
+                          </Form.Group>
+                        </Col>
+                        <Col md={6}>
+                          <Form.Group className="mb-3">
+                            <Form.Label>Year Written (Optional)</Form.Label>
+                            <Form.Control
+                              type="number"
+                              value={trainingMetadata.yearWritten}
+                              onChange={e => setTrainingMetadata({ ...trainingMetadata, yearWritten: parseInt(e.target.value) })}
+                              min="2000"
+                              max={new Date().getFullYear()}
+                            />
+                          </Form.Group>
+                        </Col>
+                      </Row>
+
+                      <Form.Group className="mb-3">
+                        <Form.Label>Description (Optional)</Form.Label>
+                        <Form.Control
+                          as="textarea"
+                          rows={2}
+                          value={trainingMetadata.description}
+                          onChange={e => setTrainingMetadata({ ...trainingMetadata, description: e.target.value })}
+                          placeholder="Brief description of this report (e.g., Warehouse fire claim with detailed damage assessment)"
+                        />
+                      </Form.Group>
+
+                      <Button
+                        variant="primary"
+                        onClick={uploadTrainingReports}
+                        disabled={uploadingTraining || trainingFiles.length === 0}
+                      >
+                        {uploadingTraining ? 'Uploading...' : 'Upload & Assimilate'}
+                      </Button>
+                    </Card.Body>
+                  </Card>
+
+                  <h5 className="mb-3">Uploaded Training Reports ({loadedTrainingReports.length})</h5>
+
+                  {loadedTrainingReports.length === 0 ? (
+                    <Alert variant="warning">
+                      No training reports uploaded yet. Upload some reference reports to train the AI.
+                    </Alert>
+                  ) : (
+                    <ListGroup>
+                      {loadedTrainingReports.map(report => (
+                        <ListGroup.Item key={report.id}>
+                          <Row className="align-items-center">
+                            <Col md={8}>
+                              <div>
+                                <strong>{report.filename}</strong>
+                                <br />
+                                <Badge bg="info" className="me-2">{report.reportType}</Badge>
+                                <Badge bg="secondary" className="me-2">{report.classOfBusiness}</Badge>
+                                {report.author && <small className="text-muted">by {report.author}</small>}
+                              </div>
+                              {report.description && (
+                                <small className="text-muted d-block mt-1">{report.description}</small>
+                              )}
+                              <small className="text-muted">
+                                Uploaded: {new Date(report.uploadedAt).toLocaleDateString()}
+                                {report.yearWritten && ` | Written: ${report.yearWritten}`}
+                              </small>
+                            </Col>
+                            <Col md={4} className="text-end">
+                              <Button
+                                variant="outline-danger"
+                                size="sm"
+                                onClick={() => deleteTrainingReport(report.id)}
+                              >
+                                Delete
+                              </Button>
+                            </Col>
+                          </Row>
+                        </ListGroup.Item>
+                      ))}
+                    </ListGroup>
+                  )}
+                </>
+              )}
+            </Card.Body>
+          </Card>
+
+          {/* STEP 2 — CLASS, TASK, AGENT, CLAIM METADATA */}
           <Card className="mb-4">
             <Card.Body>
+              <h3 className="mb-3">Step 2 · Claim Setup</h3>
+
               <Form.Group className="mb-4">
                 <Form.Label>Select Class of Business</Form.Label>
-                <Form.Select 
-                  value={classOfBusiness} 
+                <Form.Select
+                  value={classOfBusiness}
                   onChange={e => setClassOfBusiness(e.target.value)}
                 >
                   <option value="">-- Choose Class --</option>
@@ -520,12 +950,12 @@ function Home() {
 
               <Form.Group className="mb-4">
                 <Form.Label className="d-flex align-items-center gap-2">
-                  Select AI Agent <Badge bg="info">New</Badge>
+                  Select AI Agent <Badge bg="info">Sonnet 5 / Opus 4.8 · GPT-5.5 · Grok 4.5 · Gemini 3.1/3.5</Badge>
                 </Form.Label>
                 <Row>
                   {AI_AGENTS.map(agent => (
                     <Col md={6} lg={3} key={agent.value} className="mb-3">
-                      <Card 
+                      <Card
                         className={`h-100 cursor-pointer ${selectedAgent === agent.value ? 'border-primary border-2' : ''}`}
                         onClick={() => setSelectedAgent(agent.value)}
                         style={{ cursor: 'pointer' }}
@@ -549,7 +979,6 @@ function Home() {
                 </Row>
               </Form.Group>
 
-              {/* Training Reports Info */}
               {relevantTrainingReports.length > 0 && (
                 <Alert variant="success" className="mb-4">
                   <div className="d-flex justify-content-between align-items-center">
@@ -564,9 +993,9 @@ function Home() {
                       onChange={e => setUseTraining(e.target.checked)}
                     />
                   </div>
-                  <Button 
-                    variant="link" 
-                    size="sm" 
+                  <Button
+                    variant="link"
+                    size="sm"
                     onClick={() => setShowTrainingModal(true)}
                     className="p-0 mt-2"
                   >
@@ -580,26 +1009,26 @@ function Home() {
                   <Row>
                     <Col md={6}><Form.Group className="mb-3">
                       <Form.Label>Claim Number</Form.Label>
-                      <Form.Control 
-                        value={claimNumber} 
-                        onChange={e => setClaimNumber(e.target.value)} 
-                        placeholder="e.g. CLM-2026-00123" 
+                      <Form.Control
+                        value={claimNumber}
+                        onChange={e => setClaimNumber(e.target.value)}
+                        placeholder="e.g. CLM-2026-00123"
                       />
                     </Form.Group></Col>
                     <Col md={6}><Form.Group className="mb-3">
                       <Form.Label>Policy Number</Form.Label>
-                      <Form.Control 
-                        value={policyNumber} 
-                        onChange={e => setPolicyNumber(e.target.value)} 
+                      <Form.Control
+                        value={policyNumber}
+                        onChange={e => setPolicyNumber(e.target.value)}
                       />
                     </Form.Group></Col>
                   </Row>
 
                   <Form.Group className="mb-3">
                     <Form.Label>Insured Name</Form.Label>
-                    <Form.Control 
-                      value={insuredName} 
-                      onChange={e => setInsuredName(e.target.value)} 
+                    <Form.Control
+                      value={insuredName}
+                      onChange={e => setInsuredName(e.target.value)}
                     />
                   </Form.Group>
 
@@ -607,20 +1036,20 @@ function Home() {
                     <Col md={6}>
                       <Form.Group className="mb-3">
                         <Form.Label>Date of Loss</Form.Label>
-                        <Form.Control 
-                          type="date" 
-                          value={dateOfLoss} 
-                          onChange={e => setDateOfLoss(e.target.value)} 
+                        <Form.Control
+                          type="date"
+                          value={dateOfLoss}
+                          onChange={e => setDateOfLoss(e.target.value)}
                         />
                       </Form.Group>
                     </Col>
                     <Col md={6}>
                       <Form.Group className="mb-3">
                         <Form.Label>Location of Loss</Form.Label>
-                        <Form.Control 
-                          value={locationOfLoss} 
-                          onChange={e => setLocationOfLoss(e.target.value)} 
-                          placeholder="City, Address" 
+                        <Form.Control
+                          value={locationOfLoss}
+                          onChange={e => setLocationOfLoss(e.target.value)}
+                          placeholder="City, Address"
                         />
                       </Form.Group>
                     </Col>
@@ -628,12 +1057,12 @@ function Home() {
 
                   <Form.Group className="mb-4">
                     <Form.Label>Loss Description</Form.Label>
-                    <Form.Control 
-                      as="textarea" 
-                      rows={3} 
-                      value={lossDescription} 
-                      onChange={e => setLossDescription(e.target.value)} 
-                      placeholder="Brief summary of the incident..." 
+                    <Form.Control
+                      as="textarea"
+                      rows={3}
+                      value={lossDescription}
+                      onChange={e => setLossDescription(e.target.value)}
+                      placeholder="Brief summary of the incident..."
                     />
                   </Form.Group>
                 </>
@@ -641,12 +1070,13 @@ function Home() {
             </Card.Body>
           </Card>
 
+          {/* STEP 3+ — DOCUMENTS, BULLETS, GENERATION (only once a task is chosen) */}
           {selectedMode && (
             <Card className="mb-4">
               <Card.Body>
                 <div className="d-flex justify-content-between align-items-center mb-4">
                   <h3 className="mb-0">
-                    {selectedMode === 'scrutiny'
+                    Step 3 · {selectedMode === 'scrutiny'
                       ? 'Field Report Scrutiny & Analysis'
                       : `${selectedMode.charAt(0).toUpperCase() + selectedMode.slice(1)} Report`}
                   </h3>
@@ -688,45 +1118,83 @@ function Home() {
                   </>
                 )}
 
+                {/* Field Report — upload OR link */}
                 <Form.Group className="mb-4">
-                  <Form.Label>Upload Field Report (required)</Form.Label>
-                  <Form.Control
-                    type="file"
-                    accept=".docx,.pdf,.txt"
-                    onChange={handleFileChange(setFieldReport)}
-                  />
-                  {fieldReport && <small className="text-success d-block mt-1">✓ {fieldReport.name}</small>}
+                  <Form.Label>Field Report (required)</Form.Label>
+                  <Tabs
+                    activeKey={fieldReportMode}
+                    onSelect={(k) => {
+                      setFieldReportMode(k);
+                      if (k === 'upload') {
+                        setFieldReportLinkText(null);
+                        setLinkStatus(null);
+                      } else {
+                        setFieldReport(null);
+                      }
+                    }}
+                    className="mb-2"
+                  >
+                    <Tab eventKey="upload" title="Upload file">
+                      <Form.Control
+                        type="file"
+                        accept=".docx,.pdf,.txt"
+                        onChange={handleFileChange(setFieldReport)}
+                      />
+                      {fieldReport && <small className="text-success d-block mt-1">✓ {fieldReport.name}</small>}
+                    </Tab>
+                    <Tab eventKey="link" title="Paste a link">
+                      <div className="d-flex gap-2">
+                        <Form.Control
+                          type="url"
+                          placeholder="https://... link to the field report"
+                          value={fieldReportLinkUrl}
+                          onChange={e => setFieldReportLinkUrl(e.target.value)}
+                        />
+                        <Button
+                          onClick={resolveFieldReportLink}
+                          disabled={resolvingLink || !fieldReportLinkUrl.trim()}
+                        >
+                          {resolvingLink ? <Spinner size="sm" animation="border" /> : 'Read link'}
+                        </Button>
+                      </div>
+                      {linkStatus && (
+                        <Alert variant={linkStatus.ok ? 'success' : 'danger'} className="mt-2 py-2 mb-0">
+                          {linkStatus.message}
+                        </Alert>
+                      )}
+                    </Tab>
+                  </Tabs>
                 </Form.Group>
 
                 <Form.Group className="mb-4">
                   <Form.Label>
                     Upload Policy Document {selectedMode === 'final' ? '(required)' : '(optional)'}
                   </Form.Label>
-                  <Form.Control 
-                    type="file" 
-                    accept=".docx,.pdf,.txt" 
-                    onChange={handleFileChange(setPolicyDocument)} 
+                  <Form.Control
+                    type="file"
+                    accept=".docx,.pdf,.txt"
+                    onChange={handleFileChange(setPolicyDocument)}
                   />
                   {policyDocument && <small className="text-success d-block mt-1">✓ {policyDocument.name}</small>}
                 </Form.Group>
 
                 <Form.Group className="mb-4">
                   <Form.Label>Upload Endorsement (optional)</Form.Label>
-                  <Form.Control 
-                    type="file" 
-                    accept=".docx,.pdf,.txt" 
-                    onChange={handleFileChange(setEndorsement)} 
+                  <Form.Control
+                    type="file"
+                    accept=".docx,.pdf,.txt"
+                    onChange={handleFileChange(setEndorsement)}
                   />
                   {endorsement && <small className="text-success d-block mt-1">✓ {endorsement.name}</small>}
                 </Form.Group>
 
                 <Form.Group className="mb-4">
-                  <Form.Label>Additional Documents</Form.Label>
-                  <Form.Control 
-                    type="file" 
-                    multiple 
-                    accept=".docx,.pdf,.txt,.xls,.xlsx" 
-                    onChange={handleMultipleFiles(setAdditionalDocs)} 
+                  <Form.Label>Additional Documents (optional)</Form.Label>
+                  <Form.Control
+                    type="file"
+                    multiple
+                    accept=".docx,.pdf,.txt,.xls,.xlsx"
+                    onChange={handleMultipleFiles(setAdditionalDocs)}
                   />
                   {additionalDocs.length > 0 && (
                     <div className="mt-2">
@@ -740,14 +1208,34 @@ function Home() {
                   )}
                 </Form.Group>
 
+                <Form.Group className="mb-4">
+                  <Form.Label>Receipts (optional)</Form.Label>
+                  <Form.Control
+                    type="file"
+                    multiple
+                    accept=".docx,.pdf,.txt,.jpg,.jpeg,.png"
+                    onChange={handleMultipleFiles(setReceipts)}
+                  />
+                  {receipts.length > 0 && (
+                    <div className="mt-2">
+                      {receipts.map((file, idx) => (
+                        <Badge key={idx} bg="secondary" className="me-2 mb-1">
+                          {file.name}
+                          <Button variant="link" size="sm" className="text-white p-0 ms-1" onClick={removeFileFromList(setReceipts, idx)}>×</Button>
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                </Form.Group>
+
                 {selectedMode === 'final' && (
                   <Form.Group className="mb-4">
                     <Form.Label>Supporting Documents</Form.Label>
-                    <Form.Control 
-                      type="file" 
-                      multiple 
-                      accept=".docx,.pdf,.txt,.xls,.xlsx" 
-                      onChange={handleMultipleFiles(setSupportingDocs)} 
+                    <Form.Control
+                      type="file"
+                      multiple
+                      accept=".docx,.pdf,.txt,.xls,.xlsx"
+                      onChange={handleMultipleFiles(setSupportingDocs)}
                     />
                     {supportingDocs.length > 0 && (
                       <div className="mt-2">
@@ -765,6 +1253,20 @@ function Home() {
                 <h5 className="mb-3">
                   {selectedMode === 'scrutiny' ? 'Key Focus Areas for Scrutiny' : 'Report Arrangement'}
                 </h5>
+
+                {classOfBusiness && (
+                  <div className="d-flex align-items-center gap-2 mb-3">
+                    <Button size="sm" variant="outline-primary" onClick={saveClassBulletsAsDefault} disabled={savingPreset}>
+                      {savingPreset ? <Spinner size="sm" animation="border" /> : `Save as ${classOfBusiness} default`}
+                    </Button>
+                    <Button size="sm" variant="outline-danger" onClick={clearClassBulletsDefault} disabled={clearingPreset}>
+                      {clearingPreset ? <Spinner size="sm" animation="border" /> : 'Clear saved default'}
+                    </Button>
+                    {presetMsg && (
+                      <span className={`small ${presetMsg.ok ? 'text-success' : 'text-danger'}`}>{presetMsg.text}</span>
+                    )}
+                  </div>
+                )}
 
                 {headlines.map(headline => (
                   <Card key={headline.id} className="mb-3">
@@ -847,9 +1349,9 @@ function Home() {
                               </Col>
                             </Row>
                             {interviewFields.length > 1 && (
-                              <Button 
-                                variant="outline-danger" 
-                                size="sm" 
+                              <Button
+                                variant="outline-danger"
+                                size="sm"
                                 onClick={() => removeInterviewField(field.id)}
                               >
                                 Remove Interview
@@ -889,14 +1391,14 @@ function Home() {
                         {photos.map((photo, idx) => (
                           <Col key={idx} xs={6} md={4} lg={3} className="mb-2">
                             <div className="position-relative">
-                              <img 
-                                src={URL.createObjectURL(photo)} 
+                              <img
+                                src={URL.createObjectURL(photo)}
                                 alt={`Evidence ${idx + 1}`}
                                 className="img-thumbnail w-100"
                                 style={{ height: '150px', objectFit: 'cover' }}
                               />
-                              <Button 
-                                variant="danger" 
+                              <Button
+                                variant="danger"
                                 size="sm"
                                 className="position-absolute top-0 end-0 m-1"
                                 onClick={removePhoto(idx)}
@@ -931,25 +1433,18 @@ function Home() {
             </Alert>
           )}
 
+          {/* STEP 4 — GENERATED REPORT + REVIEW / REWORK */}
           {generatedReport && (
             <Card className="mb-4">
               <Card.Body>
                 <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-                  <h4 className="mb-0">Generated Report</h4>
-                  <div className="d-flex gap-2">
-                    <Button variant="primary" onClick={downloadReportAsTxt}>
-                      Download TXT
-                    </Button>
-                    <Button variant="success" onClick={downloadReportAsDocx}>
-                      Download DOCX
-                    </Button>
-                  </div>
+                  <h4 className="mb-0">Step 4 · Generated Report</h4>
                 </div>
 
-                <pre 
-                  className="bg-light p-3 rounded" 
-                  style={{ 
-                    maxHeight: '500px', 
+                <pre
+                  className="bg-light p-3 rounded"
+                  style={{
+                    maxHeight: '500px',
                     overflow: 'auto',
                     fontFamily: 'Times New Roman, serif',
                     fontSize: '12pt',
@@ -959,184 +1454,129 @@ function Home() {
                 >
                   {generatedReport}
                 </pre>
+
+                {!reportAccepted ? (
+                  <div className="mt-3">
+                    <p className="text-muted mb-2">
+                      Review the report above. Accept it to move on to download and letterhead
+                      placement, or request changes and it'll be reworked in place.
+                    </p>
+                    <ButtonGroup>
+                      <Button variant="success" onClick={() => setReportAccepted(true)}>
+                        Accept report
+                      </Button>
+                      <Button variant="outline-secondary" onClick={() => setShowFeedback(s => !s)}>
+                        Request changes
+                      </Button>
+                    </ButtonGroup>
+
+                    {showFeedback && (
+                      <div className="mt-3">
+                        <Form.Control
+                          as="textarea"
+                          rows={3}
+                          placeholder="e.g. Expand paragraph 6 on the driver's statement; tighten the subrogation section; fix the excess figure..."
+                          value={feedback}
+                          onChange={e => setFeedback(e.target.value)}
+                        />
+                        <Button
+                          className="mt-2"
+                          onClick={submitRework}
+                          disabled={reworking || !feedback.trim()}
+                        >
+                          {reworking ? <Spinner size="sm" animation="border" /> : 'Rework report'}
+                        </Button>
+                        {reworkError && <div className="text-danger small mt-2">{reworkError}</div>}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="mt-3">
+                    <Alert variant="success" className="py-2">Report accepted.</Alert>
+                    <ButtonGroup>
+                      <Button variant="outline-primary" onClick={downloadReportAsTxt}>
+                        Download TXT
+                      </Button>
+                      <Button variant="outline-primary" onClick={downloadReportAsDocx}>
+                        Download DOCX
+                      </Button>
+                    </ButtonGroup>
+                    <div className="mt-2">
+                      <Button variant="link" size="sm" onClick={() => setReportAccepted(false)}>
+                        Actually, I need to change something
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </Card.Body>
+            </Card>
+          )}
+
+          {/* STEP 5 — LETTERHEAD FINALIZATION (only once accepted) */}
+          {generatedReport && reportAccepted && (
+            <Card className="mb-4 border-success">
+              <Card.Body>
+                <h4 className="mb-3">Step 5 · Place on Letterhead</h4>
+                <Alert variant="info">
+                  Upload your official letterhead template and the accepted report above will be
+                  placed into it exactly as written, with the letterhead's formatting applied.
+                </Alert>
+
+                <Form.Group className="mb-3">
+                  <Form.Label>Letterhead Template (required)</Form.Label>
+                  <Form.Control
+                    type="file"
+                    accept=".docx,.pdf,.txt,image/*"
+                    onChange={handleFileChange(setLetterheadTemplate)}
+                  />
+                  <Form.Text className="text-muted">Doc, PDF, or an image/scan of the letterhead.</Form.Text>
+                  {letterheadTemplate && <small className="text-success d-block mt-1">✓ {letterheadTemplate.name}</small>}
+                </Form.Group>
+
+                <Button variant="success" onClick={submitLetterhead} disabled={letterheadLoading}>
+                  {letterheadLoading ? <Spinner size="sm" animation="border" /> : 'Place on letterhead'}
+                </Button>
+
+                {letterheadError && (
+                  <Alert variant="danger" dismissible onClose={() => setLetterheadError(null)} className="mt-3">
+                    {letterheadError}
+                  </Alert>
+                )}
+
+                {letterheadResult && (
+                  <div className="mt-4">
+                    <div className="d-flex justify-content-between align-items-center mb-2">
+                      <h5 className="mb-0">Letterhead Version</h5>
+                      <ButtonGroup>
+                        <Button variant="outline-primary" onClick={downloadLetterheadAsTxt}>
+                          Download TXT
+                        </Button>
+                        <Button variant="success" onClick={downloadLetterheadAsDocx}>
+                          Download DOCX
+                        </Button>
+                      </ButtonGroup>
+                    </div>
+                    <pre
+                      className="bg-light p-3 rounded"
+                      style={{
+                        maxHeight: '500px',
+                        overflow: 'auto',
+                        fontFamily: 'Times New Roman, serif',
+                        fontSize: '12pt',
+                        lineHeight: '1.5',
+                        whiteSpace: 'pre-wrap'
+                      }}
+                    >
+                      {letterheadResult}
+                    </pre>
+                  </div>
+                )}
               </Card.Body>
             </Card>
           )}
         </Tab>
 
-        {/* TRAINING TAB */}
-        <Tab eventKey="training" title={<span>📚 Training Reports <Badge bg="warning">New</Badge></span>}>
-          <Card className="mb-4">
-            <Card.Body>
-              <h3 className="mb-3">Upload Reference Reports for AI Training</h3>
-              <Alert variant="info">
-                <strong>How it works:</strong> Upload your existing high-quality reports as training examples. 
-                The AI will learn from the writing style, structure, terminology, and approach used in these reports.
-                When generating new reports, the AI will mimic the style and format of your uploaded examples.
-              </Alert>
-
-              <Card className="mb-4 border-primary">
-                <Card.Body>
-                  <h5>Upload New Training Reports</h5>
-                  
-                  <Form.Group className="mb-3">
-                    <Form.Label>Select Report Files</Form.Label>
-                    <Form.Control
-                      type="file"
-                      multiple
-                      accept=".docx,.pdf,.txt"
-                      onChange={handleTrainingFilesChange}
-                    />
-                    {trainingFiles.length > 0 && (
-                      <div className="mt-2">
-                        <strong>Selected Files:</strong>
-                        {trainingFiles.map((file, idx) => (
-                          <Badge key={idx} bg="secondary" className="me-2 mb-1 d-block">
-                            {file.name}
-                          </Badge>
-                        ))}
-                      </div>
-                    )}
-                  </Form.Group>
-
-                  <Row>
-                    <Col md={6}>
-                      <Form.Group className="mb-3">
-                        <Form.Label>Report Type</Form.Label>
-                        <Form.Select
-                          value={trainingMetadata.reportType}
-                          onChange={e => setTrainingMetadata({...trainingMetadata, reportType: e.target.value})}
-                        >
-                          <option value="scrutiny">Scrutiny</option>
-                          <option value="interim">Preliminary/Interim</option>
-                          <option value="final">Final</option>
-                        </Form.Select>
-                      </Form.Group>
-                    </Col>
-                    <Col md={6}>
-                      <Form.Group className="mb-3">
-                        <Form.Label>Class of Business</Form.Label>
-                        <Form.Select
-                          value={trainingMetadata.classOfBusiness}
-                          onChange={e => setTrainingMetadata({...trainingMetadata, classOfBusiness: e.target.value})}
-                        >
-                          <option value="">-- Select Class --</option>
-                          {CLASSES_OF_BUSINESS.map(cls => (
-                            <option key={cls} value={cls}>{cls}</option>
-                          ))}
-                        </Form.Select>
-                      </Form.Group>
-                    </Col>
-                  </Row>
-
-                  <Row>
-                    <Col md={6}>
-                      <Form.Group className="mb-3">
-                        <Form.Label>Author/Adjuster Name (Optional)</Form.Label>
-                        <Form.Control
-                          value={trainingMetadata.author}
-                          onChange={e => setTrainingMetadata({...trainingMetadata, author: e.target.value})}
-                          placeholder="e.g., John Smith"
-                        />
-                      </Form.Group>
-                    </Col>
-                    <Col md={6}>
-                      <Form.Group className="mb-3">
-                        <Form.Label>Year Written (Optional)</Form.Label>
-                        <Form.Control
-                          type="number"
-                          value={trainingMetadata.yearWritten}
-                          onChange={e => setTrainingMetadata({...trainingMetadata, yearWritten: parseInt(e.target.value)})}
-                          min="2000"
-                          max={new Date().getFullYear()}
-                        />
-                      </Form.Group>
-                    </Col>
-                  </Row>
-
-                  <Form.Group className="mb-3">
-                    <Form.Label>Description (Optional)</Form.Label>
-                    <Form.Control
-                      as="textarea"
-                      rows={2}
-                      value={trainingMetadata.description}
-                      onChange={e => setTrainingMetadata({...trainingMetadata, description: e.target.value})}
-                      placeholder="Brief description of this report (e.g., Warehouse fire claim with detailed damage assessment)"
-                    />
-                  </Form.Group>
-
-                  <Button
-                    variant="primary"
-                    onClick={uploadTrainingReports}
-                    disabled={uploadingTraining || trainingFiles.length === 0}
-                  >
-                    {uploadingTraining ? 'Uploading...' : 'Upload Training Reports'}
-                  </Button>
-                </Card.Body>
-              </Card>
-
-              <h5 className="mb-3">Uploaded Training Reports ({loadedTrainingReports.length})</h5>
-              
-              {loadedTrainingReports.length === 0 ? (
-                <Alert variant="warning">
-                  No training reports uploaded yet. Upload some reference reports to train the AI.
-                </Alert>
-              ) : (
-                <ListGroup>
-                  {loadedTrainingReports.map(report => (
-                    <ListGroup.Item key={report.id}>
-                      <Row className="align-items-center">
-                        <Col md={8}>
-                          <div>
-                            <strong>{report.filename}</strong>
-                            <br />
-                            <Badge bg="info" className="me-2">{report.reportType}</Badge>
-                            <Badge bg="secondary" className="me-2">{report.classOfBusiness}</Badge>
-                            {report.author && <small className="text-muted">by {report.author}</small>}
-                          </div>
-                          {report.description && (
-                            <small className="text-muted d-block mt-1">{report.description}</small>
-                          )}
-                          <small className="text-muted">
-                            Uploaded: {new Date(report.uploadedAt).toLocaleDateString()}
-                            {report.yearWritten && ` | Written: ${report.yearWritten}`}
-                          </small>
-                        </Col>
-                        <Col md={4} className="text-end">
-                          <Button
-                            variant="outline-danger"
-                            size="sm"
-                            onClick={() => deleteTrainingReport(report.id)}
-                          >
-                            Delete
-                          </Button>
-                        </Col>
-                      </Row>
-                    </ListGroup.Item>
-                  ))}
-                </ListGroup>
-              )}
-
-              <Alert variant="success" className="mt-4">
-                <strong>💡 Tips for Best Results:</strong>
-                <ul className="mb-0 mt-2">
-                  <li>Upload multiple examples of each report type for better learning</li>
-                  <li>Use your best, most professional reports as training examples</li>
-                  <li>Include reports from different scenarios within the same class of business</li>
-                  <li>The more diverse examples you provide, the better the AI adapts to different situations</li>
-                  <li>Reports should be in DOCX, PDF, or TXT format</li>
-                </ul>
-              </Alert>
-            </Card.Body>
-          </Card>
-        </Tab>
-
-        {/* LETTERHEAD REWRITE TAB */}
-        <Tab eventKey="letterhead" title={<span>📄 Letterhead Rewrite</span>}>
-          <LetterheadRewriteTab />
-        </Tab>
-
-        {/* COLLABORATION TAB */}
+        {/* COLLABORATION TAB — unchanged */}
         <Tab eventKey="collaboration" title={<span>🤝 AI Collaboration</span>}>
           <CollaborationTab />
         </Tab>
