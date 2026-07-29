@@ -118,7 +118,7 @@ async function callClaude({ model, prompt, textFiles, imageFiles, temperature, m
   }
 
   const msg = await anthropic.messages.create({
-    model: model || 'claude-sonnet-5',
+    model: model || 'claude-3-5-sonnet-latest',
     max_tokens: max_tokens || 4096,
     temperature: temperature ?? 0.3,
     messages: [{ role: 'user', content }],
@@ -154,7 +154,7 @@ async function callOpenAI({ model, prompt, textFiles, imageFiles, temperature, m
   messages.push({ role: 'user', content: userContent });
 
   const completion = await openai.chat.completions.create({
-    model: model || 'gpt-5',
+    model: model || 'gpt-4o',
     messages,
     temperature: temperature ?? 0.3,
     max_tokens: max_tokens || 4096,
@@ -190,7 +190,7 @@ async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max
   messages.push({ role: 'user', content: userContent });
 
   const completion = await xai.chat.completions.create({
-    model: model || 'grok-4.5',
+    model: model || 'grok-2-vision-1212',
     messages,
     temperature: temperature ?? 0.3,
     max_tokens: max_tokens || 4096,
@@ -203,14 +203,14 @@ async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max
 async function callGemini({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata }) {
   try {
     const { GoogleGenAI } = await import('@google/genai');
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY, apiVersion: 'v1beta' });
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
     const modelMap = {
-      'gemini-1.5-pro': 'gemini-3.1-pro-preview',  
+      'gemini-1.5-pro': 'gemini-3.1-pro-preview',
+      'gemini-2.0-flash': 'gemini-3.5-flash',
+      'gemini-2.5-pro': 'gemini-3.1-pro-preview',
       'gemini-3-pro': 'gemini-3.1-pro-preview',
       'gemini-3-flash': 'gemini-3.5-flash',
-      'gemini-2.5-pro': 'gemini-3.1-pro-preview',
-      'gemini-3-flash-preview': 'gemini-3.5-flash',
       'gemini-3.1-pro-preview': 'gemini-3.1-pro-preview',
       'gemini-3.5-flash': 'gemini-3.5-flash',
     };
@@ -232,10 +232,20 @@ async function callGemini({ model, prompt, textFiles, imageFiles, temperature, m
       }
     }
 
+    const config = {
+      temperature: temperature ?? 0.3,
+      maxOutputTokens: max_tokens || 4096,
+    };
+
+    // Enable high reasoning effort for pro models
+    if (targetModel.includes('pro')) {
+      config.thinkingConfig = { thinkingBudget: 2048 };
+    }
+
     const result = await ai.models.generateContent({
       model: targetModel,
       contents: [{ role: 'user', parts }],
-      config: { temperature: temperature ?? 0.3, maxOutputTokens: max_tokens || 4096, thinking: { level: 'high' } }
+      config,
     });
 
     return { content: result.response.text() };
@@ -249,11 +259,11 @@ async function callGemini({ model, prompt, textFiles, imageFiles, temperature, m
 function formatTrainingExamples(trainingExamples) {
   if (!trainingExamples || trainingExamples.length === 0) return '';
 
-  let trainingSection = '\n\n═══════════════════════════════════════════════════════════\n';
-  trainingSection += '📚 REFERENCE EXAMPLES - LEARN FROM THESE REPORTS\n';
-  trainingSection += '═══════════════════════════════════════════════════════════\n\n';
+  let trainingSection = '\n\n===========================================================\n';
+  trainingSection += 'REFERENCE EXAMPLES - LEARN FROM THESE REPORTS\n';
+  trainingSection += '===========================================================\n\n';
   trainingSection += `You have ${trainingExamples.length} reference report(s) to learn from. Study these carefully:\n\n`;
-  trainingSection += '**CRITICAL INSTRUCTIONS:**\n';
+  trainingSection += 'CRITICAL INSTRUCTIONS:\n';
   trainingSection += '1. Analyze the WRITING STYLE, TONE, and STRUCTURE of these reference reports\n';
   trainingSection += '2. Note the SPECIFIC TERMINOLOGY and PHRASING used\n';
   trainingSection += '3. Observe how sections are ORGANIZED and FORMATTED\n';
@@ -263,23 +273,23 @@ function formatTrainingExamples(trainingExamples) {
   trainingSection += '7. Use SIMILAR SENTENCE STRUCTURES and PARAGRAPH LENGTH\n\n';
 
   trainingExamples.forEach((example, idx) => {
-    trainingSection += `───────────────────────────────────────────────────────────\n`;
+    trainingSection += `-----------------------------------------------------------\n`;
     trainingSection += `REFERENCE REPORT ${idx + 1}:\n`;
     trainingSection += `Title: ${example.filename}\n`;
     if (example.author) trainingSection += `Author: ${example.author}\n`;
     if (example.yearWritten) trainingSection += `Year: ${example.yearWritten}\n`;
     if (example.description) trainingSection += `Description: ${example.description}\n`;
-    trainingSection += `───────────────────────────────────────────────────────────\n\n`;
+    trainingSection += `-----------------------------------------------------------\n\n`;
 
     const contentPreview = example.textContent.substring(0, 15000);
     trainingSection += `${contentPreview}\n\n`;
     if (example.textContent.length > 15000) trainingSection += `[... Report continues ...]\n\n`;
   });
 
-  trainingSection += '═══════════════════════════════════════════════════════════\n';
+  trainingSection += '===========================================================\n';
   trainingSection += 'END OF REFERENCE EXAMPLES\n';
-  trainingSection += '═══════════════════════════════════════════════════════════\n\n';
-  trainingSection += '**NOW CREATE YOUR REPORT:**\n';
+  trainingSection += '===========================================================\n\n';
+  trainingSection += 'NOW CREATE YOUR REPORT:\n';
   trainingSection += 'Using the EXACT SAME STYLE, TONE, and STRUCTURE as the reference reports above,\n';
   trainingSection += 'create a new report for the current claim. Match the writing style as closely as possible.\n\n';
 
@@ -311,7 +321,7 @@ function buildScrutinyPrompt(metadata) {
         focus += `\n- ${h.main}`;
       }
       if (h.subpoints && h.subpoints.length > 0) {
-        h.subpoints.forEach(s => { focus += `\n  • ${s.title}`; });
+        h.subpoints.forEach(s => { focus += `\n  * ${s.title}`; });
       }
     });
   } else {
@@ -327,7 +337,7 @@ ${trainingSection}
 
 CRITICAL WRITING REQUIREMENTS:
 1. Write ENTIRELY in reported speech (past tense)
-2. Use essay format with flowing paragraphs - NO bullet points, NO asterisks, NO hashtags
+2. Use essay format with flowing paragraphs - NO bullet points, NO raw markdown symbols
 3. Write in natural, human language - avoid AI-style formatting
 4. Be professional but conversational in tone
 5. Use proper paragraph structure with topic sentences and supporting details
@@ -354,7 +364,7 @@ ${metadata.customPrompt ? `\nADDITIONAL ANALYSIS REQUIRED:\n${metadata.customPro
 RISK MITIGATION ANALYSIS:
 At the end of the report, include a comprehensive "RISK IMPROVEMENT AND MITIGATION" section that analyzes this claim and provides recommendations on how to prevent similar incidents in the future. Consider industry best practices, safety measures, policy recommendations, and operational improvements.
 
-Remember: Write everything in reported speech (past tense), use essay format with paragraphs, avoid all bullet points and AI-style formatting.
+Remember: Write everything in reported speech (past tense), use essay format with paragraphs, avoid all bullet points and artificial markdown styling.
 `;
 }
 
@@ -383,7 +393,7 @@ ${formatTrainingExamples(metadata.trainingExamples)}
 
 CRITICAL WRITING REQUIREMENTS:
 1. Write ENTIRELY in reported speech (past tense)
-2. Use essay format with flowing paragraphs - NO bullet points, NO asterisks, NO hashtags
+2. Use essay format with flowing paragraphs - NO bullet points or raw markdown text
 3. Write in natural, human language - avoid AI-style formatting
 4. Be professional but conversational in tone
 
@@ -433,7 +443,7 @@ ${formatTrainingExamples(metadata.trainingExamples)}
 
 CRITICAL WRITING REQUIREMENTS:
 1. Write ENTIRELY in reported speech (past tense)
-2. Use essay format with flowing paragraphs - NO bullet points, NO asterisks, NO hashtags
+2. Use essay format with flowing paragraphs - NO bullet points or raw markdown symbols
 3. Write in natural, human language - avoid AI-style formatting
 4. Maintain professional but conversational tone throughout
 
@@ -459,7 +469,7 @@ This is a final report for insurers and reinsurers. Write everything in reported
 }
 
 // =================================================================
-// NEW: LETTERHEAD REWRITE
+// LETTERHEAD REWRITE
 // =================================================================
 
 function buildLetterheadPrompt({ metadata, historyBlock, isFollowUp }) {
@@ -568,7 +578,7 @@ async function rewriteToLetterhead(params) {
 }
 
 // =================================================================
-// NEW: MULTI-AGENT COLLABORATION
+// MULTI-AGENT COLLABORATION
 // =================================================================
 
 function buildCollaborationTurnPrompt({ basePrompt, agentLabel, priorTurns, roundNumber, totalRounds, historyBlock }) {
