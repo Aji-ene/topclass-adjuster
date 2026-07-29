@@ -118,7 +118,7 @@ async function callClaude({ model, prompt, textFiles, imageFiles, temperature, m
   }
 
   const msg = await anthropic.messages.create({
-    model: model || 'claude-3-5-sonnet-latest',
+    model: model || 'claude-sonnet-5',
     max_tokens: max_tokens || 4096,
     temperature: temperature ?? 0.3,
     messages: [{ role: 'user', content }],
@@ -154,7 +154,7 @@ async function callOpenAI({ model, prompt, textFiles, imageFiles, temperature, m
   messages.push({ role: 'user', content: userContent });
 
   const completion = await openai.chat.completions.create({
-    model: model || 'gpt-4o',
+    model: model || 'gpt-5.2',
     messages,
     temperature: temperature ?? 0.3,
     max_tokens: max_tokens || 4096,
@@ -190,7 +190,7 @@ async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max
   messages.push({ role: 'user', content: userContent });
 
   const completion = await xai.chat.completions.create({
-    model: model || 'grok-2-vision-1212',
+    model: model || 'grok-4.5',
     messages,
     temperature: temperature ?? 0.3,
     max_tokens: max_tokens || 4096,
