@@ -35,7 +35,7 @@ const cpUpload = upload.fields([
   { name: 'policyDocument', maxCount: 1 },
   { name: 'endorsement', maxCount: 1 },
   { name: 'additionalDocs', maxCount: 12 },
-  { name: 'photos', maxCount: 30 },
+  { name: 'photos', maxCount: 50 },
 ]);
 
 const trainingUpload = upload.fields([
@@ -44,24 +44,24 @@ const trainingUpload = upload.fields([
 
 const AI_MODELS = {
   claude: {
-    scrutiny: 'claude-sonnet-4-5-20250929',
-    interim: 'claude-sonnet-4-5-20250929',
-    final: 'claude-opus-4-5-20251101'
+    scrutiny: 'claude-sonnet-5',
+    interim: 'claude-sonnet-5',
+    final: 'claude-opus-4-8'
   },
   chatgpt: {
-    scrutiny: 'gpt-4o',
-    interim: 'gpt-4o-mini',
-    final: 'gpt-4o'
+    scrutiny: 'gpt-5',
+    interim: 'gpt-5-mini',
+    final: 'gpt-5'
   },
   grok: {
-    scrutiny: 'grok-3',
-    interim: 'grok-3',
-    final: 'grok-3'
+    scrutiny: 'grok-4.5',
+    interim: 'grok-4.5',
+    final: 'grok-4.5'
   },
   gemini: {
-    scrutiny: 'gemini-2.5-pro',
-    interim: 'gemini-3-flash-preview',
-    final: 'gemini-2.5-pro'
+    scrutiny: 'gemini-3.1-pro-preview',
+    interim: 'gemini-3.5-flash',
+    final: 'gemini-3.1-pro-preview'
   }
 };
 
@@ -72,9 +72,9 @@ const TEMPERATURE_CONFIG = {
 };
 
 const MAX_TOKENS_CONFIG = {
-  scrutiny: 7200,
-  interim: 6000,
-  final: 8800
+  scrutiny: 6200,
+  interim: 5000,
+  final: 8000
 };
 
 // In-memory storage for training reports (use database in production)
