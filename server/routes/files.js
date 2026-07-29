@@ -4,6 +4,10 @@ const path = require('path');
 const fs = require('fs/promises');
 const fsSynch = require('fs');
 const { v4: uuidv4 } = require('uuid');
+const fetch = require('node-fetch'); // Standard node-fetch, or uses native global fetch if available
+const { htmlToText } = require('html-to-text');
+const pdfParse = require('pdf-parse');
+
 const llmService = require('../services/llmService.js');
 const reportGenerator = require('../services/reportGenerator.js');
 
@@ -77,6 +81,8 @@ const MAX_TOKENS_CONFIG = {
   interim: 5000,
   final: 8000
 };
+
+const MAX_LINK_BYTES = 25 * 1024 * 1024;
 
 // In-memory storage for training reports (use database in production)
 let trainingReportsDB = [];
@@ -267,9 +273,86 @@ router.delete('/training-reports/:id', async (req, res) => {
 });
 
 // ────────────────────────────────────────────────
-// Process files and generate report (with training support)
+// Fetch field report content from a link
+// ────────────────────────────────────────────────
+router.post('/fetch-link', async (req, res) => {
+  const { url, agent = 'claude' } = req.body;
+  if (!url) return res.status(400).json({ success: false, message: 'url is required' });
+
+  try {
+    new URL(url);
+  } catch {
+    return res.status(400).json({ success: false, message: 'Not a valid URL' });
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
+    const resp = await fetch(url, { signal: controller.signal, redirect: 'follow' });
+    clearTimeout(timeout);
+    if (!resp.ok) throw new Error(`Link returned ${resp.status}`);
+
+    const contentType = resp.headers.get('content-type') || '';
+    const buffer = Buffer.from(await resp.arrayBuffer());
+    if (buffer.length > MAX_LINK_BYTES) throw new Error('Linked file is too large');
+
+    let text = null;
+    if (contentType.includes('text/html')) {
+      text = htmlToText(buffer.toString('utf-8'), { wordwrap: false });
+    } else if (contentType.includes('application/pdf')) {
+      text = (await pdfParse(buffer)).text;
+    } else if (contentType.includes('text/plain')) {
+      text = buffer.toString('utf-8');
+    }
+
+    let source = 'direct-extraction';
+    if (!text || text.trim().length < 40) {
+      // Fallback: save the buffer to a temp file and let the same
+      // extractTextFromFile()/callLLM() path take a shot at it
+      const tempDir = path.join(process.cwd(), 'uploads', 'temp');
+      await fs.mkdir(tempDir, { recursive: true });
+      const tempPath = path.join(tempDir, `${uuidv4()}-link-fetch`);
+      await fs.writeFile(tempPath, buffer);
+      
+      const extracted = await llmService.extractTextFromFile(tempPath).catch(() => null);
+      
+      // Cleanup the temporary fallback fetch file
+      fs.unlink(tempPath).catch(() => {});
+
+      if (extracted && extracted.trim().length >= 40) {
+        text = extracted;
+        source = 'file-extraction-fallback';
+      } else {
+        const result = await llmService.callLLM({
+          agent,
+          model: AI_MODELS[agent]?.scrutiny,
+          prompt:
+            'The following is raw fetched content from a field-report link. ' +
+            'Extract and return the full readable report text, preserving section headings.\n\n' +
+            buffer.toString('utf-8').slice(0, 8000),
+          textFiles: [],
+          imageFiles: [],
+        });
+        text = result.content;
+        source = `ai-agent-fallback:${agent}`;
+      }
+    }
+
+    res.json({ success: true, text, source, contentType });
+  } catch (err) {
+    console.error('Error fetching field-report link:', err);
+    res.status(502).json({
+      success: false,
+      message: `Could not read that link: ${err.message}. Try uploading the document instead.`,
+    });
+  }
+});
+
+// ────────────────────────────────────────────────
+// Process files and generate report (with training support & link field reports)
 // ────────────────────────────────────────────────
 router.post('/process-files', cpUpload, async (req, res) => {
+  let fieldReportTempPath = null;
   try {
     const {
       reportType,
@@ -285,7 +368,9 @@ router.post('/process-files', cpUpload, async (req, res) => {
       excludePhotosFromAI = 'false',
       customScrutinyPrompt = '',
       interviews = '[]',
-      useTraining = 'true', // NEW: whether to use training reports
+      useTraining = 'true',
+      fieldReportText,
+      fieldReportSourceUrl,
     } = req.body;
 
     if (!reportType || !classOfBusiness || !aiAgent) {
@@ -309,10 +394,10 @@ router.post('/process-files', cpUpload, async (req, res) => {
       });
     }
 
-    if (!req.files?.questionnaire?.[0]) {
+    if (!req.files?.questionnaire?.[0] && !fieldReportText) {
       return res.status(400).json({
         success: false,
-        message: 'Field report (questionnaire) is required'
+        message: 'Field report is required (upload a file or provide a link)'
       });
     }
 
@@ -321,6 +406,16 @@ router.post('/process-files', cpUpload, async (req, res) => {
         success: false,
         message: 'Policy document is required for final report'
       });
+    }
+
+    // A link-sourced field report has no uploaded file — write the extracted
+    // text to a temp .txt file so it flows through the standard filesToSend path
+    if (!req.files?.questionnaire?.[0] && fieldReportText) {
+      const tempDir = path.join(process.cwd(), 'uploads', 'temp');
+      await fs.mkdir(tempDir, { recursive: true });
+      fieldReportTempPath = path.join(tempDir, `${uuidv4()}-field-report-link.txt`);
+      const header = fieldReportSourceUrl ? `[Source: ${fieldReportSourceUrl}]\n\n` : '';
+      await fs.writeFile(fieldReportTempPath, header + fieldReportText, 'utf-8');
     }
 
     // Find relevant training reports
@@ -348,7 +443,7 @@ router.post('/process-files', cpUpload, async (req, res) => {
       excludePhotos: excludePhotosFromAI === 'true',
       customPrompt: customScrutinyPrompt.trim(),
       interviews: JSON.parse(interviews),
-      trainingExamples: trainingExamples, // Pass training examples to prompt builder
+      trainingExamples: trainingExamples,
     };
 
     let promptFn;
@@ -377,7 +472,7 @@ router.post('/process-files', cpUpload, async (req, res) => {
     const prompt = promptFn(metadata);
 
     const filesToSend = [
-      req.files.questionnaire[0].path,
+      req.files.questionnaire?.[0]?.path || fieldReportTempPath,
       ...(req.files.policyDocument?.[0]
         ? [req.files.policyDocument[0].path]
         : []),
@@ -385,6 +480,7 @@ router.post('/process-files', cpUpload, async (req, res) => {
         ? [req.files.endorsement[0].path]
         : []),
       ...(req.files.additionalDocs || []).map(f => f.path),
+      ...(req.files.receipts || []).map(f => f.path),
     ].filter(Boolean);
 
     const images = metadata.excludePhotos
@@ -428,6 +524,66 @@ router.post('/process-files', cpUpload, async (req, res) => {
       message: err.message || 'Processing failed',
       error: process.env.NODE_ENV === 'development' ? err.stack : undefined
     });
+  } finally {
+    // Clean up temporary text file created for link-sourced field reports
+    if (fieldReportTempPath) {
+      fs.unlink(fieldReportTempPath).catch(err => {
+        console.warn('Could not remove temporary field report file:', err);
+      });
+    }
+  }
+});
+
+// ────────────────────────────────────────────────
+// Rework report based on user feedback
+// ────────────────────────────────────────────────
+router.post('/rework', async (req, res) => {
+  try {
+    const {
+      currentReport, feedback, aiAgent, reportType,
+      classOfBusiness, claimNumber, policyNumber, insuredName,
+      dateOfLoss, locationOfLoss, lossDescription,
+    } = req.body;
+
+    if (!currentReport || !feedback) {
+      return res.status(400).json({ success: false, message: 'currentReport and feedback are required' });
+    }
+    if (!['claude', 'chatgpt', 'grok', 'gemini'].includes(aiAgent)) {
+      return res.status(400).json({ success: false, message: 'Invalid aiAgent' });
+    }
+
+    const model = AI_MODELS[aiAgent]?.[reportType] || AI_MODELS[aiAgent]?.final;
+
+    const prompt = `You are revising an already-drafted ${classOfBusiness || ''} insurance loss adjuster's report. Apply ONLY the requested change below — preserve every other section, all figures, and the existing structure, numbering, table formatting, and institutional third-person voice exactly as they are.
+
+CLAIM CONTEXT:
+Claim Number: ${claimNumber || 'Not provided'}
+Policy Number: ${policyNumber || 'Not provided'}
+Insured: ${insuredName || 'Not provided'}
+Date of Loss: ${dateOfLoss || 'Not provided'}
+Location of Loss: ${locationOfLoss || 'Not provided'}
+Loss Description: ${lossDescription || 'Not provided'}
+
+REQUESTED CHANGE:
+${feedback}
+
+CURRENT REPORT:
+${currentReport}
+
+Return the FULL revised report text, not just the changed section.`;
+
+    const result = await llmService.callLLM({
+      agent: aiAgent,
+      model,
+      prompt,
+      textFiles: [],
+      imageFiles: [],
+    });
+
+    res.json({ success: true, report: result.content });
+  } catch (err) {
+    console.error('Error reworking report:', err);
+    res.status(500).json({ success: false, message: err.message || 'Rework failed' });
   }
 });
 
