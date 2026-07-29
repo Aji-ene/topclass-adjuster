@@ -14,7 +14,7 @@ dotenv.config();
 const claimsRoutes = require('./routes/claims');
 const fileRoutes = require('./routes/files');
 const collaborationRoutes = require('./routes/collaboration-routes');
-const classBulletsRoutes = require('./route/classBullets');
+const classBulletsRoutes = require('./routes/classBullets');
 
 
 // Initialize Express app
