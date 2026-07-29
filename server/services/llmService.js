@@ -1,7 +1,56 @@
 const fs = require('fs/promises');
 const path = require('path');
+const sharp = require('sharp');
 const Anthropic = require('@anthropic-ai/sdk');
 const OpenAI = require('openai');
+const sessionStore = require('./sessionStore');
+
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024; // raw buffer cap — keeps base64 (~1.33x) safely under provider limits
+
+function mimeFromExt(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.gif') return 'image/gif';
+  if (ext === '.webp') return 'image/webp';
+  return 'image/jpeg';
+}
+
+// Reads an image and, if it's large, resizes/recompresses it to JPEG so it
+// stays under provider size limits. Small images pass through untouched.
+async function fileToOptimizedImage(filePath) {
+  const original = await fs.readFile(filePath);
+  const ext = path.extname(filePath).toLowerCase();
+
+  if (original.length <= MAX_IMAGE_BYTES && ['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(ext)) {
+    return { base64: original.toString('base64'), mimeType: mimeFromExt(filePath) };
+  }
+
+  try {
+    let quality = 85;
+    const meta = await sharp(original).metadata();
+    let pipeline = sharp(original).rotate(); // bake in EXIF orientation before resizing
+
+    if (meta.width > 1568 || meta.height > 1568) {
+      pipeline = pipeline.resize(1568, 1568, { fit: 'inside', withoutEnlargement: true });
+    }
+
+    let output = await pipeline.jpeg({ quality }).toBuffer();
+
+    while (output.length > MAX_IMAGE_BYTES && quality > 30) {
+      quality -= 15;
+      output = await sharp(original)
+        .rotate()
+        .resize(1568, 1568, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality })
+        .toBuffer();
+    }
+
+    return { base64: output.toString('base64'), mimeType: 'image/jpeg' };
+  } catch (err) {
+    console.error(`Error optimizing image ${filePath}, falling back to original:`, err.message);
+    return { base64: original.toString('base64'), mimeType: mimeFromExt(filePath) };
+  }
+}
 
 // ---------------------------------------------------------------
 // Helper: read text from common insurance/claims file types
@@ -33,16 +82,44 @@ async function extractTextFromFile(filePath) {
 }
 
 // ---------------------------------------------------------------
-async function fileToBase64(filePath) {
-  const buffer = await fs.readFile(filePath);
-  return buffer.toString('base64');
+// Sampling-parameter deprecation guard
+// ---------------------------------------------------------------
+// Anthropic deprecated temperature/top_p/top_k outright for models released
+// after Opus 4.6 (Sonnet 5, Opus 4.8, and everything after — the API 400s
+// the instant the field is present, regardless of value). Anthropic's own
+// guidance is to stop setting it and rely on prompting instead, so Claude
+// simply never sends it below.
+//
+// OpenAI/xAI/Gemini haven't deprecated it as of this writing, but model
+// families have a habit of doing this one at a time (GPT-5-mini already
+// rejects non-default temperature). Rather than hardcode a model-name
+// allowlist that goes stale the next time any provider ships a new model,
+// each of those three calls is wrapped so that if the provider ever
+// responds with this specific "temperature is deprecated" class of 400, it
+// transparently retries once without the field instead of failing the
+// whole report generation.
+function isTemperatureDeprecationError(err) {
+  const msg = (err?.message || err?.error?.message || '').toLowerCase();
+  return msg.includes('temperature') && (msg.includes('deprecat') || msg.includes('not support') || msg.includes('unsupported'));
+}
+
+async function withTemperatureFallback(makeRequest) {
+  try {
+    return await makeRequest(true); // first attempt: include temperature
+  } catch (err) {
+    if (isTemperatureDeprecationError(err)) {
+      console.warn('Provider rejected temperature parameter — retrying without it.');
+      return await makeRequest(false); // retry: omit temperature
+    }
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------
 async function callLLM({ agent, model, prompt, textFiles = [], imageFiles = [], temperature, max_tokens, metadata }) {
   switch (agent) {
     case 'claude':
-      return callClaude({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata });
+      return callClaude({ model, prompt, textFiles, imageFiles, max_tokens, metadata });
     case 'chatgpt':
       return callOpenAI({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata });
     case 'grok':
@@ -55,46 +132,35 @@ async function callLLM({ agent, model, prompt, textFiles = [], imageFiles = [], 
 }
 
 // ---------------------------------------------------------------
-async function callClaude({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata }) {
+// NOTE: no `temperature` parameter here at all — Sonnet 5 / Opus 4.8+
+// reject the field outright (see isTemperatureDeprecationError above).
+// If you ever point `model` at an older Claude model that still accepts
+// temperature, that's fine — omitting it just means the provider's
+// default sampling is used, which Anthropic now recommends anyway.
+async function callClaude({ model, prompt, textFiles, imageFiles, max_tokens, metadata }) {
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
   const content = [{ type: 'text', text: prompt }];
 
   for (const filePath of textFiles) {
     const text = await extractTextFromFile(filePath);
-    content.push({
-      type: 'text',
-      text: `\n\n--- Document: ${path.basename(filePath)} ---\n${text}`
-    });
+    content.push({ type: 'text', text: `\n\n--- Document: ${path.basename(filePath)} ---\n${text}` });
   }
 
   for (const imgPath of imageFiles) {
     try {
-      const base64 = await fileToBase64(imgPath);
-      const ext = path.extname(imgPath).toLowerCase();
-      let mime = 'image/jpeg';
-
-      if (ext === '.png') mime = 'image/png';
-      else if (ext === '.gif') mime = 'image/gif';
-      else if (ext === '.webp') mime = 'image/webp';
-
-      content.push({
-        type: 'image',
-        source: { type: 'base64', media_type: mime, data: base64 }
-      });
+      const { base64, mimeType } = await fileToOptimizedImage(imgPath);
+      content.push({ type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } });
     } catch (err) {
       console.error(`Error processing image ${imgPath}:`, err);
     }
   }
 
-  // FIX: Temperature omitted to satisfy Anthropic requirements for reasoning models/updates
-  const payload = {
-    model: model || 'claude-3-5-sonnet-latest',
+  const msg = await anthropic.messages.create({
+    model: model || 'claude-sonnet-5',
     max_tokens: max_tokens || 4096,
     messages: [{ role: 'user', content }],
-  };
-
-  const msg = await anthropic.messages.create(payload);
+  });
 
   return { content: msg.content[0].text };
 }
@@ -111,26 +177,13 @@ async function callOpenAI({ model, prompt, textFiles, imageFiles, temperature, m
 
   for (const filePath of textFiles) {
     const text = await extractTextFromFile(filePath);
-    userContent.push({
-      type: 'text',
-      text: `\n\n[Document: ${path.basename(filePath)}]\n${text}`
-    });
+    userContent.push({ type: 'text', text: `\n\n[Document: ${path.basename(filePath)}]\n${text}` });
   }
 
   for (const imgPath of imageFiles) {
     try {
-      const base64 = await fileToBase64(imgPath);
-      const ext = path.extname(imgPath).toLowerCase();
-      let mime = 'image/jpeg';
-
-      if (ext === '.png') mime = 'image/png';
-      else if (ext === '.gif') mime = 'image/gif';
-      else if (ext === '.webp') mime = 'image/webp';
-
-      userContent.push({
-        type: 'image_url',
-        image_url: { url: `data:${mime};base64,${base64}` }
-      });
+      const { base64, mimeType } = await fileToOptimizedImage(imgPath);
+      userContent.push({ type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } });
     } catch (err) {
       console.error(`Error processing image ${imgPath}:`, err);
     }
@@ -138,28 +191,21 @@ async function callOpenAI({ model, prompt, textFiles, imageFiles, temperature, m
 
   messages.push({ role: 'user', content: userContent });
 
-  // FIX: Switched from max_tokens to max_completion_tokens
-  const completionParams = {
-    model: model || 'gpt-4o',
-    messages,
-    max_completion_tokens: max_tokens || 4096,
-  };
-
-  if (typeof temperature === 'number') {
-    completionParams.temperature = temperature;
-  }
-
-  const completion = await openai.chat.completions.create(completionParams);
+  const completion = await withTemperatureFallback((includeTemperature) =>
+    openai.chat.completions.create({
+      model: model || 'gpt-5',
+      messages,
+      ...(includeTemperature ? { temperature: temperature ?? 0.3 } : {}),
+      max_tokens: max_tokens || 4096,
+    })
+  );
 
   return { content: completion.choices[0].message.content };
 }
 
 // ---------------------------------------------------------------
 async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata }) {
-  const xai = new OpenAI({
-    apiKey: process.env.XAI_API_KEY,
-    baseURL: 'https://api.x.ai/v1',
-  });
+  const xai = new OpenAI({ apiKey: process.env.XAI_API_KEY, baseURL: 'https://api.x.ai/v1' });
 
   const messages = [
     { role: 'system', content: 'You are Grok — expert insurance analyst with deep knowledge of claims processing and risk assessment.' }
@@ -169,26 +215,13 @@ async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max
 
   for (const filePath of textFiles) {
     const text = await extractTextFromFile(filePath);
-    userContent.push({
-      type: 'text',
-      text: `\n\n[File: ${path.basename(filePath)}]\n${text}`
-    });
+    userContent.push({ type: 'text', text: `\n\n[File: ${path.basename(filePath)}]\n${text}` });
   }
 
   for (const imgPath of imageFiles) {
     try {
-      const base64 = await fileToBase64(imgPath);
-      const ext = path.extname(imgPath).toLowerCase();
-      let mime = 'image/jpeg';
-
-      if (ext === '.png') mime = 'image/png';
-      else if (ext === '.gif') mime = 'image/gif';
-      else if (ext === '.webp') mime = 'image/webp';
-
-      userContent.push({
-        type: 'image_url',
-        image_url: { url: `data:${mime};base64,${base64}` }
-      });
+      const { base64, mimeType } = await fileToOptimizedImage(imgPath);
+      userContent.push({ type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } });
     } catch (err) {
       console.error(`Error processing image ${imgPath}:`, err);
     }
@@ -196,18 +229,14 @@ async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max
 
   messages.push({ role: 'user', content: userContent });
 
-  // FIX: Switched from max_tokens to max_completion_tokens
-  const completionParams = {
-    model: model || 'grok-2',
-    messages,
-    max_completion_tokens: max_tokens || 4096,
-  };
-
-  if (typeof temperature === 'number') {
-    completionParams.temperature = temperature;
-  }
-
-  const completion = await xai.chat.completions.create(completionParams);
+  const completion = await withTemperatureFallback((includeTemperature) =>
+    xai.chat.completions.create({
+      model: model || 'grok-4.5',
+      messages,
+      ...(includeTemperature ? { temperature: temperature ?? 0.3 } : {}),
+      max_tokens: max_tokens || 4096,
+    })
+  );
 
   return { content: completion.choices[0].message.content };
 }
@@ -216,21 +245,18 @@ async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max
 async function callGemini({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata }) {
   try {
     const { GoogleGenAI } = await import('@google/genai');
-
-    const ai = new GoogleGenAI({ 
-      apiKey: process.env.GEMINI_API_KEY,
-      apiVersion: 'v1beta' 
-    });
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY, apiVersion: 'v1beta' });
 
     const modelMap = {
-      'gemini-1.5-pro': 'gemini-2.5-pro',
-      'gemini-3-pro': 'gemini-2.5-pro',
-      'gemini-3-flash': 'gemini-2.5-flash',
-      'gemini-2.5-pro': 'gemini-2.5-pro',
-      'gemini-3-flash-preview': 'gemini-2.5-flash',
+      'gemini-1.5-pro': 'gemini-3.1-pro-preview',
+      'gemini-3-pro': 'gemini-3.1-pro-preview',
+      'gemini-3-flash': 'gemini-3.5-flash',
+      'gemini-2.5-pro': 'gemini-3.1-pro-preview',
+      'gemini-3-flash-preview': 'gemini-3.5-flash',
+      'gemini-3.1-pro-preview': 'gemini-3.1-pro-preview',
+      'gemini-3.5-flash': 'gemini-3.5-flash',
     };
-
-    const targetModel = modelMap[model] || 'gemini-2.5-flash';
+    const targetModel = modelMap[model] || 'gemini-3.5-flash';
 
     const parts = [{ text: prompt }];
 
@@ -241,32 +267,26 @@ async function callGemini({ model, prompt, textFiles, imageFiles, temperature, m
 
     for (const imgPath of imageFiles) {
       try {
-        const base64 = await fileToBase64(imgPath);
-        const ext = path.extname(imgPath).toLowerCase();
-        let mime = 'image/jpeg';
-
-        if (ext === '.png') mime = 'image/png';
-        else if (ext === '.gif') mime = 'image/gif';
-        else if (ext === '.webp') mime = 'image/webp';
-
-        parts.push({ inlineData: { mimeType: mime, data: base64 } });
+        const { base64, mimeType } = await fileToOptimizedImage(imgPath);
+        parts.push({ inlineData: { mimeType, data: base64 } });
       } catch (err) {
         console.error(`Error processing image ${imgPath}:`, err);
       }
     }
 
-    // FIX: Temperature omitted when thinking mode is enabled
-    const result = await ai.models.generateContent({
-      model: targetModel,
-      contents: [{ role: 'user', parts }],
-      config: { 
-        maxOutputTokens: max_tokens || 4096,
-        thinking: { level: 'high' } 
-      }
-    });
+    const result = await withTemperatureFallback((includeTemperature) =>
+      ai.models.generateContent({
+        model: targetModel,
+        contents: [{ role: 'user', parts }],
+        config: {
+          ...(includeTemperature ? { temperature: temperature ?? 0.3 } : {}),
+          maxOutputTokens: max_tokens || 4096,
+          thinking: { level: 'high' },
+        }
+      })
+    );
 
     return { content: result.response.text() };
-
   } catch (error) {
     console.error('Gemini Service Error:', error);
     throw new Error(`Gemini API error: ${error.message}`);
@@ -274,12 +294,8 @@ async function callGemini({ model, prompt, textFiles, imageFiles, temperature, m
 }
 
 // ---------------------------------------------------------------
-// Helper to format training examples
-// ---------------------------------------------------------------
 function formatTrainingExamples(trainingExamples) {
-  if (!trainingExamples || trainingExamples.length === 0) {
-    return '';
-  }
+  if (!trainingExamples || trainingExamples.length === 0) return '';
 
   let trainingSection = '\n\n═══════════════════════════════════════════════════════════\n';
   trainingSection += '📚 REFERENCE EXAMPLES - LEARN FROM THESE REPORTS\n';
@@ -305,10 +321,7 @@ function formatTrainingExamples(trainingExamples) {
 
     const contentPreview = example.textContent.substring(0, 15000);
     trainingSection += `${contentPreview}\n\n`;
-
-    if (example.textContent.length > 15000) {
-      trainingSection += `[... Report continues ...]\n\n`;
-    }
+    if (example.textContent.length > 15000) trainingSection += `[... Report continues ...]\n\n`;
   });
 
   trainingSection += '═══════════════════════════════════════════════════════════\n';
@@ -322,22 +335,18 @@ function formatTrainingExamples(trainingExamples) {
 }
 
 // ---------------------------------------------------------------
-// Prompt builders
-// ---------------------------------------------------------------
 function buildScrutinyPrompt(metadata) {
   let focus = '';
 
   if (metadata.structuredHeadlines && metadata.structuredHeadlines.length > 0) {
     metadata.structuredHeadlines.forEach(h => {
       const mainHeadline = h.main.toUpperCase();
-
       if (mainHeadline.includes('THE INSURED')) {
         focus += `\n\n${h.main}:\nConduct an online search for "${metadata.insuredName}" and write a comprehensive 3-paragraph background covering the company's history, operations, industry standing, and any relevant business activities. Use reported speech (past tense) and write in essay format, not bullet points.`;
       } else if (mainHeadline.includes('POLICY TERMS') || mainHeadline.includes('POLICY CONDITIONS')) {
         focus += `\n\n${h.main}:\nCarefully review the Policy Document and any Endorsements provided. First, list all applicable Memos, Clauses, Warranties, Conditions, and Exclusions that are RELEVANT to this specific claim. Then, separately list those that are NOT relevant to this claim. Write in reported speech and essay format.`;
       } else if (mainHeadline.includes('INTERVIEW')) {
         focus += `\n\n${h.main}:\nDocument the interviews conducted. For each person interviewed, state their name, position, and a comprehensive summary of the conversation in reported speech (past tense). Write in paragraph form, not bullet points.`;
-
         if (metadata.interviews && metadata.interviews.length > 0) {
           focus += '\n\nInterviews conducted:';
           metadata.interviews.forEach(interview => {
@@ -349,11 +358,8 @@ function buildScrutinyPrompt(metadata) {
       } else {
         focus += `\n- ${h.main}`;
       }
-
       if (h.subpoints && h.subpoints.length > 0) {
-        h.subpoints.forEach(s => {
-          focus += `\n  • ${s.title}`;
-        });
+        h.subpoints.forEach(s => { focus += `\n  • ${s.title}`; });
       }
     });
   } else {
@@ -404,7 +410,6 @@ function buildPreliminaryPrompt(metadata) {
   const structure =
     metadata.structuredHeadlines?.map(h => {
       let section = `${h.number}. ${h.main}`;
-
       const mainHeadline = h.main.toUpperCase();
       if (mainHeadline.includes('THE INSURED')) {
         section += '\n   Conduct online research and write 3 comprehensive paragraphs about the insured entity.';
@@ -413,11 +418,9 @@ function buildPreliminaryPrompt(metadata) {
       } else if (mainHeadline.includes('INTERVIEW')) {
         section += '\n   Document all interviews in reported speech with names and detailed conversation summaries.';
       }
-
       if (h.subpoints && h.subpoints.length > 0) {
         section += '\n' + h.subpoints.map(s => `   ${s.number} ${s.title}`).join('\n');
       }
-
       return section;
     }).join('\n') || 'Use standard preliminary report format';
 
@@ -457,7 +460,6 @@ function buildFinalPrompt(metadata) {
   const structure =
     metadata.structuredHeadlines?.map(h => {
       let section = `${h.number}. ${h.main}`;
-
       const mainHeadline = h.main.toUpperCase();
       if (mainHeadline.includes('THE INSURED')) {
         section += '\n   Research and write 3 comprehensive paragraphs about the insured.';
@@ -466,11 +468,9 @@ function buildFinalPrompt(metadata) {
       } else if (mainHeadline.includes('INTERVIEW')) {
         section += '\n   Document interviews comprehensively in reported speech.';
       }
-
       if (h.subpoints && h.subpoints.length > 0) {
         section += '\n' + h.subpoints.map(s => `   ${s.number} ${s.title}`).join('\n');
       }
-
       return section;
     }).join('\n') || 'Standard final report structure';
 
@@ -506,11 +506,297 @@ This is a final report for insurers and reinsurers. Write everything in reported
 `;
 }
 
+// =================================================================
+// LETTERHEAD REWRITE
+// =================================================================
+
+function buildLetterheadPrompt({ metadata, historyBlock, isFollowUp }) {
+  const {
+    instructions,
+    insuredName,
+    claimNumber,
+    policyNumber,
+    dateOfLoss,
+    locationOfLoss,
+    classOfBusiness,
+  } = metadata;
+
+  return `
+You are a senior insurance claims adjuster producing an official report on the firm's letterhead.
+
+${historyBlock}
+
+TASK:
+${isFollowUp
+  ? 'This is a FOLLOW-UP request in an ongoing letterhead rewrite session. Use the prior context above (the letterhead template and the report you already produced) and apply the new instruction below. Return the FULL updated report, not just the changed part, unless the instruction explicitly asks for a fragment.'
+  : `You have been given (1) an official letterhead template document/image, and (2) one or more field reports and supporting documents. Rewrite the field report content INTO the letterhead's structure, heading style, numbering convention, and formatting — matching its layout, section order, and formality as closely as the source material allows. Where the field report is missing information the letterhead format expects, note it as "[TO BE CONFIRMED]" rather than inventing facts.`}
+
+CRITICAL WRITING REQUIREMENTS:
+1. Match the letterhead's own structure and section headings — do not impose the standard Scrutiny/Preliminary/Final template unless the letterhead itself uses it.
+2. Write in reported speech (past tense), essay format, no bullet points or markdown symbols in the final report body.
+3. If photographs are provided, analyze each one and integrate relevant observations into the appropriate section (or a dedicated Photographs section if the letterhead has one) rather than just listing them.
+4. Do not fabricate figures, names, or dates that are not present in the source documents.
+
+Claim Reference Details (use only where they fit the letterhead's fields):
+Claim Number: ${claimNumber || 'Not provided'}
+Policy Number: ${policyNumber || 'Not provided'}
+Insured: ${insuredName || 'Not provided'}
+Date of Loss: ${dateOfLoss || 'Not provided'}
+Location: ${locationOfLoss || 'Not provided'}
+Class of Business: ${classOfBusiness || 'Not provided'}
+
+USER INSTRUCTIONS FOR THIS REQUEST:
+${instructions || 'No additional instructions — rewrite the field report faithfully into the letterhead format.'}
+
+If anything about the letterhead format or the requested changes is ambiguous, end your response with a short "QUESTIONS FOR YOU:" section listing what you need clarified before finalizing — but still provide your best-effort full draft above it.
+`;
+}
+
+/**
+ * @param {object} params
+ */
+async function rewriteToLetterhead(params) {
+  const {
+    agent = 'claude',
+    model,
+    sessionId,
+    letterheadFiles = [],
+    letterheadImages = [],
+    fieldReportFiles = [],
+    policyFiles = [],
+    endorsementFiles = [],
+    additionalFiles = [],
+    photoFiles = [],
+    instructions = '',
+    metadata = {},
+    isFollowUp = false,
+    temperature = 0.3,
+    max_tokens = 4096,
+  } = params;
+
+  const resolvedSessionId = sessionId || sessionStore.makeSessionId(metadata.claimNumber);
+
+  const historyBlock = sessionStore.formatHistoryForPrompt(resolvedSessionId, { tab: 'letterhead' });
+
+  const prompt = buildLetterheadPrompt({
+    metadata: { ...metadata, instructions },
+    historyBlock,
+    isFollowUp,
+  });
+
+  sessionStore.appendEntry(resolvedSessionId, {
+    tab: 'letterhead',
+    agent,
+    role: 'user',
+    prompt: instructions || '[initial letterhead rewrite request]',
+  });
+
+  const textFiles = [...letterheadFiles, ...fieldReportFiles, ...policyFiles, ...endorsementFiles, ...additionalFiles];
+  const imageFiles = [...letterheadImages, ...photoFiles];
+
+  const result = await callLLM({
+    agent,
+    model,
+    prompt,
+    textFiles,
+    imageFiles,
+    temperature,
+    max_tokens,
+    metadata,
+  });
+
+  sessionStore.appendEntry(resolvedSessionId, {
+    tab: 'letterhead',
+    agent,
+    role: 'assistant',
+    response: result.content,
+  });
+
+  return { ...result, sessionId: resolvedSessionId };
+}
+
+// =================================================================
+// MULTI-AGENT COLLABORATION
+// =================================================================
+
+function buildCollaborationTurnPrompt({ basePrompt, agentLabel, priorTurns, roundNumber, totalRounds, historyBlock }) {
+  let priorTurnsBlock = '';
+  if (priorTurns.length > 0) {
+    priorTurnsBlock = '\n\nRESPONSES SO FAR IN THIS DISCUSSION:\n';
+    priorTurns.forEach(t => {
+      priorTurnsBlock += `\n--- ${t.agentLabel} (round ${t.round}) ---\n${t.content}\n`;
+    });
+  }
+
+  return `
+You are ${agentLabel}, one of several AI adjusters collaborating on this claims task. This is round ${roundNumber} of ${totalRounds}.
+
+${historyBlock}
+
+TASK FROM THE USER:
+${basePrompt}
+${priorTurnsBlock}
+
+INSTRUCTIONS:
+- If this is round 1, give your own independent analysis/draft.
+- If other agents have already responded this round or in earlier rounds, read their input above. Agree where you agree, but explicitly flag anything you think is wrong, incomplete, or worth reconsidering — don't just restate what's already been said.
+- Keep your response focused; the goal is a better final answer, not a longer one.
+- Write in reported speech, essay format, no bullet points in the substantive analysis (a short list is fine only for flagging disagreements).
+`;
+}
+
+function buildSynthesisPrompt({ basePrompt, allTurns, historyBlock }) {
+  let transcript = '';
+  allTurns.forEach(t => {
+    transcript += `\n--- ${t.agentLabel} (round ${t.round}) ---\n${t.content}\n`;
+  });
+
+  return `
+You are producing the FINAL synthesized answer from a multi-agent collaboration.
+
+${historyBlock}
+
+ORIGINAL TASK:
+${basePrompt}
+
+FULL DISCUSSION TRANSCRIPT:
+${transcript}
+
+Produce one final, coherent report/answer that takes the best of each agent's contribution, resolves any disagreements with a clear rationale, and reads as a single unified document — not a summary of who said what. Write in reported speech, essay format, professional tone.
+`;
+}
+
+const AGENT_LABELS = { claude: 'Claude', chatgpt: 'ChatGPT', grok: 'Grok', gemini: 'Gemini' };
+
+/**
+ * @param {object} params
+ */
+async function runCollaboration(params) {
+  const {
+    agents = ['claude', 'chatgpt'],
+    discuss = false,
+    rounds = 2,
+    synthesizerAgent,
+    prompt,
+    textFiles = [],
+    imageFiles = [],
+    sessionId,
+    metadata = {},
+    temperature = 0.3,
+    max_tokens = 4096,
+  } = params;
+
+  const resolvedSessionId = sessionId || sessionStore.makeSessionId(metadata.claimNumber);
+  const historyBlock = sessionStore.formatHistoryForPrompt(resolvedSessionId, { tab: 'collaboration' });
+
+  sessionStore.appendEntry(resolvedSessionId, {
+    tab: 'collaboration',
+    agent: 'collaboration',
+    role: 'user',
+    prompt,
+    meta: { agents, discuss, rounds },
+  });
+
+  // ---- Mode 1: parallel, independent answers ----
+  if (!discuss) {
+    const results = await Promise.all(agents.map(async (agentKey) => {
+      const turnPrompt = `${historyBlock}\n\nTASK:\n${prompt}`;
+      const res = await callLLM({
+        agent: agentKey,
+        prompt: turnPrompt,
+        textFiles,
+        imageFiles,
+        temperature,
+        max_tokens,
+        metadata,
+      });
+      return { agent: agentKey, agentLabel: AGENT_LABELS[agentKey] || agentKey, content: res.content };
+    }));
+
+    results.forEach(r => {
+      sessionStore.appendEntry(resolvedSessionId, {
+        tab: 'collaboration',
+        agent: r.agent,
+        role: 'assistant',
+        response: r.content,
+      });
+    });
+
+    return { mode: 'parallel', sessionId: resolvedSessionId, results };
+  }
+
+  // ---- Mode 2: sequential discussion + synthesis ----
+  const allTurns = [];
+  for (let round = 1; round <= rounds; round++) {
+    for (const agentKey of agents) {
+      const turnPrompt = buildCollaborationTurnPrompt({
+        basePrompt: prompt,
+        agentLabel: AGENT_LABELS[agentKey] || agentKey,
+        priorTurns: allTurns,
+        roundNumber: round,
+        totalRounds: rounds,
+        historyBlock,
+      });
+
+      const res = await callLLM({
+        agent: agentKey,
+        prompt: turnPrompt,
+        textFiles,
+        imageFiles,
+        temperature,
+        max_tokens,
+        metadata,
+      });
+
+      const turn = { agent: agentKey, agentLabel: AGENT_LABELS[agentKey] || agentKey, round, content: res.content };
+      allTurns.push(turn);
+
+      sessionStore.appendEntry(resolvedSessionId, {
+        tab: 'collaboration',
+        agent: agentKey,
+        role: 'assistant',
+        response: res.content,
+        meta: { round },
+      });
+    }
+  }
+
+  const finalAgent = synthesizerAgent || agents[0];
+  const synthesisPrompt = buildSynthesisPrompt({ basePrompt: prompt, allTurns, historyBlock });
+  const synthesisRes = await callLLM({
+    agent: finalAgent,
+    prompt: synthesisPrompt,
+    textFiles,
+    imageFiles,
+    temperature,
+    max_tokens,
+    metadata,
+  });
+
+  sessionStore.appendEntry(resolvedSessionId, {
+    tab: 'collaboration',
+    agent: finalAgent,
+    role: 'assistant',
+    response: synthesisRes.content,
+    meta: { synthesis: true },
+  });
+
+  return {
+    mode: 'discussion',
+    sessionId: resolvedSessionId,
+    rounds: allTurns,
+    synthesis: { agent: finalAgent, content: synthesisRes.content },
+  };
+}
+
 // ---------------------------------------------------------------
 module.exports = {
   callLLM,
   buildScrutinyPrompt,
   buildPreliminaryPrompt,
   buildFinalPrompt,
-  extractTextFromFile
+  extractTextFromFile,
+  rewriteToLetterhead,
+  runCollaboration,
+  sessionStore,
 };
