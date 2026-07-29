@@ -14,6 +14,8 @@ dotenv.config();
 const claimsRoutes = require('./routes/claims');
 const fileRoutes = require('./routes/files');
 const collaborationRoutes = require('./routes/collaboration-routes');
+const classBulletsRoutes = require('./route/classBullets');
+
 
 // Initialize Express app
 const app = express();
@@ -41,6 +43,7 @@ setInterval(() => {
 app.use('/api/claims', claimsRoutes);
 app.use('/api/files', fileRoutes);
 app.use('/api/files', collaborationRoutes);
+app.use('/api', classBulletsRoutes);
 
 // Serve React build - This should come AFTER API routes
 app.use(express.static(path.join(__dirname, '../client/build')));
