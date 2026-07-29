@@ -68,17 +68,16 @@ async function callClaude({ model, prompt, textFiles, imageFiles, temperature, m
     });
   }
 
-  // FIX: Process images properly
   for (const imgPath of imageFiles) {
     try {
       const base64 = await fileToBase64(imgPath);
       const ext = path.extname(imgPath).toLowerCase();
       let mime = 'image/jpeg';
-      
+
       if (ext === '.png') mime = 'image/png';
       else if (ext === '.gif') mime = 'image/gif';
       else if (ext === '.webp') mime = 'image/webp';
-      
+
       content.push({
         type: 'image',
         source: { type: 'base64', media_type: mime, data: base64 }
@@ -88,12 +87,14 @@ async function callClaude({ model, prompt, textFiles, imageFiles, temperature, m
     }
   }
 
-  const msg = await anthropic.messages.create({
-    model,
-    max_tokens,
-    temperature,
+  // FIX: Temperature omitted to satisfy Anthropic requirements for reasoning models/updates
+  const payload = {
+    model: model || 'claude-3-5-sonnet-latest',
+    max_tokens: max_tokens || 4096,
     messages: [{ role: 'user', content }],
-  });
+  };
+
+  const msg = await anthropic.messages.create(payload);
 
   return { content: msg.content[0].text };
 }
@@ -121,11 +122,11 @@ async function callOpenAI({ model, prompt, textFiles, imageFiles, temperature, m
       const base64 = await fileToBase64(imgPath);
       const ext = path.extname(imgPath).toLowerCase();
       let mime = 'image/jpeg';
-      
+
       if (ext === '.png') mime = 'image/png';
       else if (ext === '.gif') mime = 'image/gif';
       else if (ext === '.webp') mime = 'image/webp';
-      
+
       userContent.push({
         type: 'image_url',
         image_url: { url: `data:${mime};base64,${base64}` }
@@ -137,12 +138,18 @@ async function callOpenAI({ model, prompt, textFiles, imageFiles, temperature, m
 
   messages.push({ role: 'user', content: userContent });
 
-  const completion = await openai.chat.completions.create({
-    model,
+  // FIX: Switched from max_tokens to max_completion_tokens
+  const completionParams = {
+    model: model || 'gpt-4o',
     messages,
-    temperature,
-    max_tokens,
-  });
+    max_completion_tokens: max_tokens || 4096,
+  };
+
+  if (typeof temperature === 'number') {
+    completionParams.temperature = temperature;
+  }
+
+  const completion = await openai.chat.completions.create(completionParams);
 
   return { content: completion.choices[0].message.content };
 }
@@ -173,11 +180,11 @@ async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max
       const base64 = await fileToBase64(imgPath);
       const ext = path.extname(imgPath).toLowerCase();
       let mime = 'image/jpeg';
-      
+
       if (ext === '.png') mime = 'image/png';
       else if (ext === '.gif') mime = 'image/gif';
       else if (ext === '.webp') mime = 'image/webp';
-      
+
       userContent.push({
         type: 'image_url',
         image_url: { url: `data:${mime};base64,${base64}` }
@@ -189,12 +196,18 @@ async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max
 
   messages.push({ role: 'user', content: userContent });
 
-  const completion = await xai.chat.completions.create({
-    model,
+  // FIX: Switched from max_tokens to max_completion_tokens
+  const completionParams = {
+    model: model || 'grok-2',
     messages,
-    temperature,
-    max_tokens,
-  });
+    max_completion_tokens: max_tokens || 4096,
+  };
+
+  if (typeof temperature === 'number') {
+    completionParams.temperature = temperature;
+  }
+
+  const completion = await xai.chat.completions.create(completionParams);
 
   return { content: completion.choices[0].message.content };
 }
@@ -211,13 +224,13 @@ async function callGemini({ model, prompt, textFiles, imageFiles, temperature, m
 
     const modelMap = {
       'gemini-1.5-pro': 'gemini-2.5-pro',
-      'gemini-3-pro': 'gemini-3-pro-preview',
-      'gemini-3-flash': 'gemini-3-flash-preview',
+      'gemini-3-pro': 'gemini-2.5-pro',
+      'gemini-3-flash': 'gemini-2.5-flash',
       'gemini-2.5-pro': 'gemini-2.5-pro',
-      'gemini-3-flash-preview': 'gemini-3-flash-preview',
+      'gemini-3-flash-preview': 'gemini-2.5-flash',
     };
 
-    const targetModel = modelMap[model] || 'gemini-3-flash-preview';
+    const targetModel = modelMap[model] || 'gemini-2.5-flash';
 
     const parts = [{ text: prompt }];
 
@@ -231,22 +244,22 @@ async function callGemini({ model, prompt, textFiles, imageFiles, temperature, m
         const base64 = await fileToBase64(imgPath);
         const ext = path.extname(imgPath).toLowerCase();
         let mime = 'image/jpeg';
-        
+
         if (ext === '.png') mime = 'image/png';
         else if (ext === '.gif') mime = 'image/gif';
         else if (ext === '.webp') mime = 'image/webp';
-        
+
         parts.push({ inlineData: { mimeType: mime, data: base64 } });
       } catch (err) {
         console.error(`Error processing image ${imgPath}:`, err);
       }
     }
 
+    // FIX: Temperature omitted when thinking mode is enabled
     const result = await ai.models.generateContent({
       model: targetModel,
       contents: [{ role: 'user', parts }],
       config: { 
-        temperature: temperature || 0.7, 
         maxOutputTokens: max_tokens || 4096,
         thinking: { level: 'high' } 
       }
@@ -267,7 +280,7 @@ function formatTrainingExamples(trainingExamples) {
   if (!trainingExamples || trainingExamples.length === 0) {
     return '';
   }
-  
+
   let trainingSection = '\n\n═══════════════════════════════════════════════════════════\n';
   trainingSection += '📚 REFERENCE EXAMPLES - LEARN FROM THESE REPORTS\n';
   trainingSection += '═══════════════════════════════════════════════════════════\n\n';
@@ -280,7 +293,7 @@ function formatTrainingExamples(trainingExamples) {
   trainingSection += '5. MIMIC this exact style in your new report\n';
   trainingSection += '6. Match the PROFESSIONAL TONE and FORMALITY LEVEL\n';
   trainingSection += '7. Use SIMILAR SENTENCE STRUCTURES and PARAGRAPH LENGTH\n\n';
-  
+
   trainingExamples.forEach((example, idx) => {
     trainingSection += `───────────────────────────────────────────────────────────\n`;
     trainingSection += `REFERENCE REPORT ${idx + 1}:\n`;
@@ -289,23 +302,22 @@ function formatTrainingExamples(trainingExamples) {
     if (example.yearWritten) trainingSection += `Year: ${example.yearWritten}\n`;
     if (example.description) trainingSection += `Description: ${example.description}\n`;
     trainingSection += `───────────────────────────────────────────────────────────\n\n`;
-    
-    // Include the actual report content
-    const contentPreview = example.textContent.substring(0, 15000); // First 15k chars
+
+    const contentPreview = example.textContent.substring(0, 15000);
     trainingSection += `${contentPreview}\n\n`;
-    
+
     if (example.textContent.length > 15000) {
       trainingSection += `[... Report continues ...]\n\n`;
     }
   });
-  
+
   trainingSection += '═══════════════════════════════════════════════════════════\n';
   trainingSection += 'END OF REFERENCE EXAMPLES\n';
   trainingSection += '═══════════════════════════════════════════════════════════\n\n';
   trainingSection += '**NOW CREATE YOUR REPORT:**\n';
   trainingSection += 'Using the EXACT SAME STYLE, TONE, and STRUCTURE as the reference reports above,\n';
   trainingSection += 'create a new report for the current claim. Match the writing style as closely as possible.\n\n';
-  
+
   return trainingSection;
 }
 
@@ -314,21 +326,18 @@ function formatTrainingExamples(trainingExamples) {
 // ---------------------------------------------------------------
 function buildScrutinyPrompt(metadata) {
   let focus = '';
-  
-  // Check if user has structured headlines
+
   if (metadata.structuredHeadlines && metadata.structuredHeadlines.length > 0) {
     metadata.structuredHeadlines.forEach(h => {
       const mainHeadline = h.main.toUpperCase();
-      
-      // Handle special focus areas
+
       if (mainHeadline.includes('THE INSURED')) {
         focus += `\n\n${h.main}:\nConduct an online search for "${metadata.insuredName}" and write a comprehensive 3-paragraph background covering the company's history, operations, industry standing, and any relevant business activities. Use reported speech (past tense) and write in essay format, not bullet points.`;
       } else if (mainHeadline.includes('POLICY TERMS') || mainHeadline.includes('POLICY CONDITIONS')) {
         focus += `\n\n${h.main}:\nCarefully review the Policy Document and any Endorsements provided. First, list all applicable Memos, Clauses, Warranties, Conditions, and Exclusions that are RELEVANT to this specific claim. Then, separately list those that are NOT relevant to this claim. Write in reported speech and essay format.`;
       } else if (mainHeadline.includes('INTERVIEW')) {
         focus += `\n\n${h.main}:\nDocument the interviews conducted. For each person interviewed, state their name, position, and a comprehensive summary of the conversation in reported speech (past tense). Write in paragraph form, not bullet points.`;
-        
-        // Add interview data if provided
+
         if (metadata.interviews && metadata.interviews.length > 0) {
           focus += '\n\nInterviews conducted:';
           metadata.interviews.forEach(interview => {
@@ -340,8 +349,7 @@ function buildScrutinyPrompt(metadata) {
       } else {
         focus += `\n- ${h.main}`;
       }
-      
-      // Add subpoints
+
       if (h.subpoints && h.subpoints.length > 0) {
         h.subpoints.forEach(s => {
           focus += `\n  • ${s.title}`;
@@ -352,10 +360,9 @@ function buildScrutinyPrompt(metadata) {
     focus = 'No specific focus areas provided — use standard scrutiny checklist';
   }
 
-  // Add training examples if available
   const trainingSection = formatTrainingExamples(metadata.trainingExamples);
-  
-  let prompt = `
+
+  return `
 You are a senior insurance claims adjuster with 15+ years experience in ${metadata.classOfBusiness} insurance.
 
 ${trainingSection}
@@ -391,16 +398,13 @@ At the end of the report, include a comprehensive "RISK IMPROVEMENT AND MITIGATI
 
 Remember: Write everything in reported speech (past tense), use essay format with paragraphs, avoid all bullet points and AI-style formatting.
 `;
-
-  return prompt;
 }
 
 function buildPreliminaryPrompt(metadata) {
   const structure =
     metadata.structuredHeadlines?.map(h => {
       let section = `${h.number}. ${h.main}`;
-      
-      // Handle special sections
+
       const mainHeadline = h.main.toUpperCase();
       if (mainHeadline.includes('THE INSURED')) {
         section += '\n   Conduct online research and write 3 comprehensive paragraphs about the insured entity.';
@@ -409,11 +413,11 @@ function buildPreliminaryPrompt(metadata) {
       } else if (mainHeadline.includes('INTERVIEW')) {
         section += '\n   Document all interviews in reported speech with names and detailed conversation summaries.';
       }
-      
+
       if (h.subpoints && h.subpoints.length > 0) {
         section += '\n' + h.subpoints.map(s => `   ${s.number} ${s.title}`).join('\n');
       }
-      
+
       return section;
     }).join('\n') || 'Use standard preliminary report format';
 
@@ -453,7 +457,7 @@ function buildFinalPrompt(metadata) {
   const structure =
     metadata.structuredHeadlines?.map(h => {
       let section = `${h.number}. ${h.main}`;
-      
+
       const mainHeadline = h.main.toUpperCase();
       if (mainHeadline.includes('THE INSURED')) {
         section += '\n   Research and write 3 comprehensive paragraphs about the insured.';
@@ -462,11 +466,11 @@ function buildFinalPrompt(metadata) {
       } else if (mainHeadline.includes('INTERVIEW')) {
         section += '\n   Document interviews comprehensively in reported speech.';
       }
-      
+
       if (h.subpoints && h.subpoints.length > 0) {
         section += '\n' + h.subpoints.map(s => `   ${s.number} ${s.title}`).join('\n');
       }
-      
+
       return section;
     }).join('\n') || 'Standard final report structure';
 
@@ -508,5 +512,5 @@ module.exports = {
   buildScrutinyPrompt,
   buildPreliminaryPrompt,
   buildFinalPrompt,
-  extractTextFromFile // Export for use in training report upload
+  extractTextFromFile
 };
