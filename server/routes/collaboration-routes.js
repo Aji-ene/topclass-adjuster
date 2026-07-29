@@ -123,6 +123,7 @@ router.post(
 
       const pathsOf = (arr) => (arr || []).map(f => f.path);
 
+      const isImage = (p) => /\.(jpe?g|png|gif|webp)$/i.test(p);
       const result = await runCollaboration({
         agents,
         discuss,
@@ -131,8 +132,11 @@ router.post(
         prompt,
         sessionId,
         metadata,
-        textFiles: pathsOf(files.documents),
-        imageFiles: pathsOf(files.photos),
+        textFiles: pathsOf(files.documents).filter(p => !isImage(p)),
+        imageFiles: [
+          ...pathsOf(files.documents).filter(isImage),
+          ...pathsOf(files.photos),
+        ],
       });
 
       res.json({ success: true, ...result });
