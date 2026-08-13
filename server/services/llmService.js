@@ -190,6 +190,13 @@ async function callClaude({ model, prompt, textFiles, imageFiles, max_tokens, me
 // from the prompt itself (built by buildScrutinyPrompt / buildPreliminaryPrompt
 // / buildFinalPrompt / buildLetterheadPrompt), driven by the reference/training
 // report and the user's own instructions rather than a hardcoded persona.
+//
+// NOTE: uses `max_completion_tokens`, not `max_tokens` — OpenAI's chat
+// completions endpoint rejects `max_tokens` outright on newer models
+// ("Unsupported parameter: 'max_tokens' is not supported with this model.
+// Use 'max_completion_tokens' instead."). `max_tokens` still silently works
+// on some older models but 400s on current ones, so the current param name
+// is used unconditionally here rather than trying to branch on model name.
 async function callOpenAI({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -218,7 +225,7 @@ async function callOpenAI({ model, prompt, textFiles, imageFiles, temperature, m
       model: model || 'gpt-5',
       messages,
       ...(includeTemperature ? { temperature: temperature ?? 0.3 } : {}),
-      max_tokens: max_tokens || 4096,
+      max_completion_tokens: max_tokens || 4096,
     })
   );
 
@@ -227,6 +234,12 @@ async function callOpenAI({ model, prompt, textFiles, imageFiles, temperature, m
 
 // ---------------------------------------------------------------
 // No system message — see note on callOpenAI above.
+//
+// NOTE: xAI's own Chat Completions docs still document `max_tokens`
+// natively (Grok isn't strictly the OpenAI API, just SDK-compatible), so
+// this one is intentionally left as max_tokens rather than guessed at. If
+// xAI ever starts rejecting it the same way OpenAI did, switch this one
+// too.
 async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata }) {
   const xai = new OpenAI({ apiKey: process.env.XAI_API_KEY, baseURL: 'https://api.x.ai/v1' });
 
