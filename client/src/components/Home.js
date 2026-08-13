@@ -109,7 +109,12 @@ function Home() {
   const [linkStatus, setLinkStatus] = useState(null); // { ok, message }
 
   const [excludePhotosFromAI, setExcludePhotosFromAI] = useState(false);
+
+  // Instructions for the report — now REQUIRED for every report type (not
+  // just scrutiny). This is what drives how closely the AI mirrors any
+  // uploaded reference/training report and what deviations to make from it.
   const [customScrutinyPrompt, setCustomScrutinyPrompt] = useState('');
+  const [submitAttempted, setSubmitAttempted] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -423,9 +428,14 @@ function Home() {
 
   // Report generation
   const handleGenerate = async () => {
+    setSubmitAttempted(true);
+
     if (!selectedMode) return setError('Please select a mode');
     if (!selectedAgent) return setError('Please select an AI agent');
     if (!classOfBusiness) return setError('Please select Class of Business');
+    if (!customScrutinyPrompt.trim()) {
+      return setError('Please provide instructions for this report before generating.');
+    }
     if (!fieldReport && !fieldReportLinkText) {
       return setError('Please upload the Field Report or provide a link to it');
     }
@@ -452,9 +462,10 @@ function Home() {
     // Add training preference
     formData.append('useTraining', useTraining);
 
-    if (selectedMode === 'scrutiny' && customScrutinyPrompt.trim()) {
-      formData.append('customScrutinyPrompt', customScrutinyPrompt.trim());
-    }
+    // Instructions are now required for every report type — always send
+    // them, not just for scrutiny (backend metadata.customPrompt needs to
+    // be wired up for the 'interim'/'final' report types too).
+    formData.append('customScrutinyPrompt', customScrutinyPrompt.trim());
 
     if (hasInterviewsSelected) {
       formData.append('interviews', JSON.stringify(interviewFields.filter(f =>
@@ -579,23 +590,27 @@ function Home() {
     if (!generatedReport) return;
 
     try {
+      // Multipart, not JSON — the original photo File objects ride along so
+      // the "Photo: <filename> — <caption>" lines in the report text can be
+      // matched to real image bytes and embedded server-side.
+      const formData = new FormData();
+      formData.append('reportText', generatedReport);
+      formData.append('metadata', JSON.stringify({
+        reportType: selectedMode === 'preliminary' ? 'interim' : selectedMode,
+        aiAgent: selectedAgent,
+        claimNumber,
+        policyNumber,
+        insuredName,
+        dateOfLoss,
+        locationOfLoss,
+        classOfBusiness,
+        generatedAt: new Date().toISOString(),
+      }));
+      photos.forEach(photo => formData.append('photos', photo));
+
       const res = await fetch(`${API_URL}/api/files/export/docx`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          reportText: generatedReport,
-          metadata: {
-            reportType: selectedMode === 'preliminary' ? 'interim' : selectedMode,
-            aiAgent: selectedAgent,
-            claimNumber,
-            policyNumber,
-            insuredName,
-            dateOfLoss,
-            locationOfLoss,
-            classOfBusiness,
-            generatedAt: new Date().toISOString(),
-          }
-        })
+        body: formData,
       });
 
       if (!res.ok) {
@@ -675,24 +690,26 @@ function Home() {
   const downloadLetterheadAsDocx = async () => {
     if (!letterheadResult) return;
     try {
+      // Multipart, not JSON — same reasoning as downloadReportAsDocx above.
+      const formData = new FormData();
+      formData.append('reportText', letterheadResult);
+      formData.append('metadata', JSON.stringify({
+        reportType: selectedMode === 'preliminary' ? 'interim' : selectedMode,
+        aiAgent: selectedAgent,
+        claimNumber,
+        policyNumber,
+        insuredName,
+        dateOfLoss,
+        locationOfLoss,
+        classOfBusiness,
+        generatedAt: new Date().toISOString(),
+        letterhead: true,
+      }));
+      photos.forEach(photo => formData.append('photos', photo));
+
       const res = await fetch(`${API_URL}/api/files/export/docx`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          reportText: letterheadResult,
-          metadata: {
-            reportType: selectedMode === 'preliminary' ? 'interim' : selectedMode,
-            aiAgent: selectedAgent,
-            claimNumber,
-            policyNumber,
-            insuredName,
-            dateOfLoss,
-            locationOfLoss,
-            classOfBusiness,
-            generatedAt: new Date().toISOString(),
-            letterhead: true,
-          }
-        })
+        body: formData,
       });
       if (!res.ok) throw new Error(`Server responded ${res.status}`);
       const blob = await res.blob();
@@ -743,7 +760,9 @@ function Home() {
                   <Alert variant="info" className="mt-3">
                     <strong>How it works:</strong> Upload your existing high-quality reports first.
                     The system assimilates them — learning writing style, structure, terminology,
-                    and table formatting — before you move on to building a new report below.
+                    table formatting, and photo placement — before you move on to building a new
+                    report below. The new report will mirror this format, with room for the
+                    instructions you give it in Step 3.
                   </Alert>
 
                   <Card className="mb-4 border-primary">
@@ -1086,37 +1105,44 @@ function Home() {
                 </div>
 
                 {selectedMode === 'scrutiny' && (
-                  <>
-                    <Alert variant="info" className="mb-4">
-                      <strong>AI Expert Mode:</strong> The AI will act as an experienced insurance claims adjuster.
-                      It will review the field report in detail, ask intelligent probing questions,
-                      highlight missing details, inconsistencies, or gaps in evidence,
-                      suggest documents/photographs needed, and provide tailored recommendations
-                      based on the selected class of business.
-                    </Alert>
-
-                    <Card className="mb-4 border-warning">
-                      <Card.Body>
-                        <Form.Group>
-                          <Form.Label className="d-flex align-items-center gap-2">
-                            <strong>Additional Analysis Instructions</strong>
-                            <Badge bg="warning" text="dark">Optional</Badge>
-                          </Form.Label>
-                          <Form.Control
-                            as="textarea"
-                            rows={4}
-                            value={customScrutinyPrompt}
-                            onChange={e => setCustomScrutinyPrompt(e.target.value)}
-                            placeholder="Enter any specific analysis tasks..."
-                          />
-                          <Form.Text className="text-muted">
-                            This prompt will be used in addition to the standard scrutiny analysis.
-                          </Form.Text>
-                        </Form.Group>
-                      </Card.Body>
-                    </Card>
-                  </>
+                  <Alert variant="info" className="mb-4">
+                    <strong>AI Expert Mode:</strong> The AI will act as an experienced insurance claims adjuster.
+                    It will review the field report in detail, ask intelligent probing questions,
+                    highlight missing details, inconsistencies, or gaps in evidence,
+                    suggest documents/photographs needed, and provide tailored recommendations
+                    based on the selected class of business.
+                  </Alert>
                 )}
+
+                {/* Instructions — REQUIRED for every report type. This is what
+                    tells the AI how closely to mirror the uploaded reference/
+                    training report and what to change from the standard format. */}
+                <Card className="mb-4 border-warning">
+                  <Card.Body>
+                    <Form.Group>
+                      <Form.Label className="d-flex align-items-center gap-2">
+                        <strong>Instructions for This Report</strong>
+                        <Badge bg="danger">Required</Badge>
+                      </Form.Label>
+                      <Form.Control
+                        as="textarea"
+                        rows={4}
+                        value={customScrutinyPrompt}
+                        onChange={e => setCustomScrutinyPrompt(e.target.value)}
+                        placeholder="Tell the AI what to focus on, how closely to mirror the attached reference/training report, and any modifications you want from the standard format..."
+                        isInvalid={submitAttempted && !customScrutinyPrompt.trim()}
+                      />
+                      <Form.Text className="text-muted">
+                        This drives how the AI writes the report — including how closely it
+                        mirrors any training/reference report uploaded in Step 1. Required for
+                        every report type.
+                      </Form.Text>
+                      <Form.Control.Feedback type="invalid">
+                        Please provide instructions for this report before generating.
+                      </Form.Control.Feedback>
+                    </Form.Group>
+                  </Card.Body>
+                </Card>
 
                 {/* Field Report — upload OR link */}
                 <Form.Group className="mb-4">
@@ -1418,7 +1444,7 @@ function Home() {
                     variant="success"
                     size="lg"
                     onClick={handleGenerate}
-                    disabled={loading}
+                    disabled={loading || !customScrutinyPrompt.trim()}
                   >
                     {loading ? 'Processing...' : `Generate ${selectedMode === 'scrutiny' ? 'Scrutiny Report' : `${selectedMode} Report`}`}
                   </Button>
