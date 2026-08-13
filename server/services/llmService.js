@@ -52,6 +52,21 @@ async function fileToOptimizedImage(filePath) {
   }
 }
 
+// imageFiles entries can be either a plain path string (older callers —
+// rewriteToLetterhead, runCollaboration) or a { path, originalName } object
+// (files.js /process-files, so the [Photo: ...] marker the model uses is the
+// original browser filename the frontend can re-upload later for DOCX
+// export, not the randomized name multer stores it under on disk).
+function normalizeImageRef(imgFile) {
+  if (typeof imgFile === 'string') {
+    return { imgPath: imgFile, displayName: path.basename(imgFile) };
+  }
+  return {
+    imgPath: imgFile.path,
+    displayName: imgFile.originalName || path.basename(imgFile.path),
+  };
+}
+
 // ---------------------------------------------------------------
 // Helper: read text from common insurance/claims file types
 // ---------------------------------------------------------------
@@ -137,6 +152,11 @@ async function callLLM({ agent, model, prompt, textFiles = [], imageFiles = [], 
 // If you ever point `model` at an older Claude model that still accepts
 // temperature, that's fine — omitting it just means the provider's
 // default sampling is used, which Anthropic now recommends anyway.
+//
+// Each image is preceded by a small "[Photo: filename]" text block so the
+// model can cite photos by filename in the report body (see
+// PHOTO_SECTION_INSTRUCTIONS below) — the export step swaps those filename
+// references for the actual embedded image.
 async function callClaude({ model, prompt, textFiles, imageFiles, max_tokens, metadata }) {
   const content = [{ type: 'text', text: prompt }];
 
@@ -145,9 +165,11 @@ async function callClaude({ model, prompt, textFiles, imageFiles, max_tokens, me
     content.push({ type: 'text', text: `\n\n--- Document: ${path.basename(filePath)} ---\n${text}` });
   }
 
-  for (const imgPath of imageFiles) {
+  for (const imgFile of imageFiles) {
+    const { imgPath, displayName } = normalizeImageRef(imgFile);
     try {
       const { base64, mimeType } = await fileToOptimizedImage(imgPath);
+      content.push({ type: 'text', text: `\n[Photo: ${displayName}]` });
       content.push({ type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } });
     } catch (err) {
       console.error(`Error processing image ${imgPath}:`, err);
@@ -164,12 +186,12 @@ async function callClaude({ model, prompt, textFiles, imageFiles, max_tokens, me
 }
 
 // ---------------------------------------------------------------
+// No system message — the task framing, style, and constraints all come
+// from the prompt itself (built by buildScrutinyPrompt / buildPreliminaryPrompt
+// / buildFinalPrompt / buildLetterheadPrompt), driven by the reference/training
+// report and the user's own instructions rather than a hardcoded persona.
 async function callOpenAI({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-  const messages = [
-    { role: 'system', content: 'You are an expert insurance claims adjuster with extensive experience in analyzing claims and writing professional reports.' }
-  ];
 
   const userContent = [{ type: 'text', text: prompt }];
 
@@ -178,16 +200,18 @@ async function callOpenAI({ model, prompt, textFiles, imageFiles, temperature, m
     userContent.push({ type: 'text', text: `\n\n[Document: ${path.basename(filePath)}]\n${text}` });
   }
 
-  for (const imgPath of imageFiles) {
+  for (const imgFile of imageFiles) {
+    const { imgPath, displayName } = normalizeImageRef(imgFile);
     try {
       const { base64, mimeType } = await fileToOptimizedImage(imgPath);
+      userContent.push({ type: 'text', text: `\n[Photo: ${displayName}]` });
       userContent.push({ type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } });
     } catch (err) {
       console.error(`Error processing image ${imgPath}:`, err);
     }
   }
 
-  messages.push({ role: 'user', content: userContent });
+  const messages = [{ role: 'user', content: userContent }];
 
   const completion = await withTemperatureFallback((includeTemperature) =>
     openai.chat.completions.create({
@@ -202,12 +226,9 @@ async function callOpenAI({ model, prompt, textFiles, imageFiles, temperature, m
 }
 
 // ---------------------------------------------------------------
+// No system message — see note on callOpenAI above.
 async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max_tokens, metadata }) {
   const xai = new OpenAI({ apiKey: process.env.XAI_API_KEY, baseURL: 'https://api.x.ai/v1' });
-
-  const messages = [
-    { role: 'system', content: 'You are Grok — expert insurance analyst with deep knowledge of claims processing and risk assessment.' }
-  ];
 
   const userContent = [{ type: 'text', text: prompt }];
 
@@ -216,16 +237,18 @@ async function callGrok({ model, prompt, textFiles, imageFiles, temperature, max
     userContent.push({ type: 'text', text: `\n\n[File: ${path.basename(filePath)}]\n${text}` });
   }
 
-  for (const imgPath of imageFiles) {
+  for (const imgFile of imageFiles) {
+    const { imgPath, displayName } = normalizeImageRef(imgFile);
     try {
       const { base64, mimeType } = await fileToOptimizedImage(imgPath);
+      userContent.push({ type: 'text', text: `\n[Photo: ${displayName}]` });
       userContent.push({ type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } });
     } catch (err) {
       console.error(`Error processing image ${imgPath}:`, err);
     }
   }
 
-  messages.push({ role: 'user', content: userContent });
+  const messages = [{ role: 'user', content: userContent }];
 
   const completion = await withTemperatureFallback((includeTemperature) =>
     xai.chat.completions.create({
@@ -263,9 +286,11 @@ async function callGemini({ model, prompt, textFiles, imageFiles, temperature, m
       parts.push({ text: `\n\n[Document: ${path.basename(filePath)}]\n${text}` });
     }
 
-    for (const imgPath of imageFiles) {
+    for (const imgFile of imageFiles) {
+      const { imgPath, displayName } = normalizeImageRef(imgFile);
       try {
         const { base64, mimeType } = await fileToOptimizedImage(imgPath);
+        parts.push({ text: `\n[Photo: ${displayName}]` });
         parts.push({ inlineData: { mimeType, data: base64 } });
       } catch (err) {
         console.error(`Error processing image ${imgPath}:`, err);
@@ -296,15 +321,15 @@ function formatTrainingExamples(trainingExamples) {
   if (!trainingExamples || trainingExamples.length === 0) return '';
 
   let trainingSection = '\n\n═══════════════════════════════════════════════════════════\n';
-  trainingSection += '📚 REFERENCE EXAMPLES - LEARN FROM THESE REPORTS\n';
+  trainingSection += '📚 REFERENCE / TRAINING REPORT(S) — MIRROR THIS FORMAT\n';
   trainingSection += '═══════════════════════════════════════════════════════════\n\n';
-  trainingSection += `You have ${trainingExamples.length} reference report(s) to learn from. Study these carefully:\n\n`;
+  trainingSection += `You have ${trainingExamples.length} reference report(s) below. Study them carefully:\n\n`;
   trainingSection += '**CRITICAL INSTRUCTIONS:**\n';
   trainingSection += '1. Analyze the WRITING STYLE, TONE, and STRUCTURE of these reference reports\n';
   trainingSection += '2. Note the SPECIFIC TERMINOLOGY and PHRASING used\n';
-  trainingSection += '3. Observe how sections are ORGANIZED and FORMATTED\n';
+  trainingSection += '3. Observe how sections are ORGANIZED and FORMATTED, including where photographs are placed\n';
   trainingSection += '4. Pay attention to the LEVEL OF DETAIL provided\n';
-  trainingSection += '5. MIMIC this exact style in your new report\n';
+  trainingSection += '5. MIMIC this format in your new report, applying any instructions given below on top of it\n';
   trainingSection += '6. Match the PROFESSIONAL TONE and FORMALITY LEVEL\n';
   trainingSection += '7. Use SIMILAR SENTENCE STRUCTURES and PARAGRAPH LENGTH\n\n';
 
@@ -324,13 +349,21 @@ function formatTrainingExamples(trainingExamples) {
 
   trainingSection += '═══════════════════════════════════════════════════════════\n';
   trainingSection += 'END OF REFERENCE EXAMPLES\n';
-  trainingSection += '═══════════════════════════════════════════════════════════\n\n';
-  trainingSection += '**NOW CREATE YOUR REPORT:**\n';
-  trainingSection += 'Using the EXACT SAME STYLE, TONE, and STRUCTURE as the reference reports above,\n';
-  trainingSection += 'create a new report for the current claim. Match the writing style as closely as possible.\n\n';
+  trainingSection += '═══════════════════════════════════════════════════════════\n';
 
   return trainingSection;
 }
+
+// ---------------------------------------------------------------
+// Shared photo-handling instructions — used across the Scrutiny,
+// Preliminary, and Final report prompts. Photos are sent to the model as
+// image content blocks, each preceded by a "[Photo: filename]" text marker
+// (see the imageFiles loops in callClaude/callOpenAI/callGrok/callGemini
+// above), so the model can cite them by filename. The export step (DOCX
+// generation, in reportGenerator.js) looks for "Photo: filename — caption"
+// lines in the returned text and swaps them for the actual image.
+// ---------------------------------------------------------------
+const PHOTO_SECTION_INSTRUCTIONS = `Reference the uploaded photographs directly rather than writing long descriptions of them. For each photograph, insert a line in the EXACT form "Photo: <filename> — <brief caption>" (using an em dash — between the filename and the caption), where <brief caption> is a single sentence (no more than ~20 words) capturing what it shows and its relevance. Use the filename exactly as given in the "[Photo: ...]" marker attached to that image — do not rename, translate, or reformat it. Place each photo entry at the point in the report where it is most relevant, following the same placement, grouping, and ordering as the reference/training report above, if one was provided — mirror its structure rather than defaulting to a single end-of-report photo dump. If no reference report was provided, group the photo entries under a single "PHOTOGRAPHS" section at the end, in the order the files were uploaded. Keep captions brief — the filename markers are what get swapped for the actual images downstream, so avoid padding this section with extra prose.`;
 
 // ---------------------------------------------------------------
 function buildScrutinyPrompt(metadata) {
@@ -340,11 +373,11 @@ function buildScrutinyPrompt(metadata) {
     metadata.structuredHeadlines.forEach(h => {
       const mainHeadline = h.main.toUpperCase();
       if (mainHeadline.includes('THE INSURED')) {
-        focus += `\n\n${h.main}:\nConduct an online search for "${metadata.insuredName}" and write a comprehensive 3-paragraph background covering the company's history, operations, industry standing, and any relevant business activities. Use reported speech (past tense) and write in essay format, not bullet points.`;
+        focus += `\n\n${h.main}:\nConduct an online search for "${metadata.insuredName}" and write a comprehensive 3-paragraph background covering the company's history, operations, industry standing, and any relevant business activities.`;
       } else if (mainHeadline.includes('POLICY TERMS') || mainHeadline.includes('POLICY CONDITIONS')) {
-        focus += `\n\n${h.main}:\nCarefully review the Policy Document and any Endorsements provided. First, list all applicable Memos, Clauses, Warranties, Conditions, and Exclusions that are RELEVANT to this specific claim. Then, separately list those that are NOT relevant to this claim. Write in reported speech and essay format.`;
+        focus += `\n\n${h.main}:\nCarefully review the Policy Document and any Endorsements provided. First, list all applicable Memos, Clauses, Warranties, Conditions, and Exclusions that are RELEVANT to this specific claim. Then, separately list those that are NOT relevant to this claim.`;
       } else if (mainHeadline.includes('INTERVIEW')) {
-        focus += `\n\n${h.main}:\nDocument the interviews conducted. For each person interviewed, state their name, position, and a comprehensive summary of the conversation in reported speech (past tense). Write in paragraph form, not bullet points.`;
+        focus += `\n\n${h.main}:\nDocument the interviews conducted. For each person interviewed, state their name, position, and a comprehensive summary of the conversation.`;
         if (metadata.interviews && metadata.interviews.length > 0) {
           focus += '\n\nInterviews conducted:';
           metadata.interviews.forEach(interview => {
@@ -367,16 +400,11 @@ function buildScrutinyPrompt(metadata) {
   const trainingSection = formatTrainingExamples(metadata.trainingExamples);
 
   return `
-You are a senior insurance claims adjuster with 15+ years experience in ${metadata.classOfBusiness} insurance.
+You are preparing a Field Report Scrutiny / Analysis for ${metadata.classOfBusiness} insurance.
 
 ${trainingSection}
-
-CRITICAL WRITING REQUIREMENTS:
-1. Write ENTIRELY in reported speech (past tense)
-2. Use essay format with flowing paragraphs - NO bullet points, NO asterisks, NO hashtags
-3. Write in natural, human language - avoid AI-style formatting
-4. Be professional but conversational in tone
-5. Use proper paragraph structure with topic sentences and supporting details
+${trainingSection ? 'Mirror the reference report above in structure, tone, and style as closely as the source material allows. Apply the instructions below on top of that mirrored format.\n' : ''}
+${metadata.customPrompt ? `INSTRUCTIONS FOR THIS REPORT:\n${metadata.customPrompt}\n` : ''}
 
 Claim Details:
 Claim Number: ${metadata.claimNumber}
@@ -392,15 +420,11 @@ ${metadata.lossDescription}
 Focus areas for scrutiny:
 ${focus}
 
-PHOTOGRAPHS SECTION:
-Review all uploaded photographs carefully. In a dedicated "PHOTOGRAPHS" section at the end of your report, describe each photograph in detail, explaining what it shows, its relevance to the claim, and any observations about the damage or evidence depicted. Write in reported speech.
-
-${metadata.customPrompt ? `\nADDITIONAL ANALYSIS REQUIRED:\n${metadata.customPrompt}\n` : ''}
+PHOTOGRAPHS:
+${PHOTO_SECTION_INSTRUCTIONS}
 
 RISK MITIGATION ANALYSIS:
 At the end of the report, include a comprehensive "RISK IMPROVEMENT AND MITIGATION" section that analyzes this claim and provides recommendations on how to prevent similar incidents in the future. Consider industry best practices, safety measures, policy recommendations, and operational improvements.
-
-Remember: Write everything in reported speech (past tense), use essay format with paragraphs, avoid all bullet points and AI-style formatting.
 `;
 }
 
@@ -414,7 +438,7 @@ function buildPreliminaryPrompt(metadata) {
       } else if (mainHeadline.includes('POLICY TERMS') || mainHeadline.includes('POLICY CONDITIONS')) {
         section += '\n   Review policy documents and categorize applicable clauses, exclusions, and conditions.';
       } else if (mainHeadline.includes('INTERVIEW')) {
-        section += '\n   Document all interviews in reported speech with names and detailed conversation summaries.';
+        section += '\n   Document all interviews with names and detailed conversation summaries.';
       }
       if (h.subpoints && h.subpoints.length > 0) {
         section += '\n' + h.subpoints.map(s => `   ${s.number} ${s.title}`).join('\n');
@@ -422,16 +446,14 @@ function buildPreliminaryPrompt(metadata) {
       return section;
     }).join('\n') || 'Use standard preliminary report format';
 
+  const trainingSection = formatTrainingExamples(metadata.trainingExamples);
+
   return `
 You are preparing a Preliminary / Interim Claims Report for ${metadata.classOfBusiness} insurance.
 
-${formatTrainingExamples(metadata.trainingExamples)}
-
-CRITICAL WRITING REQUIREMENTS:
-1. Write ENTIRELY in reported speech (past tense)
-2. Use essay format with flowing paragraphs - NO bullet points, NO asterisks, NO hashtags
-3. Write in natural, human language - avoid AI-style formatting
-4. Be professional but conversational in tone
+${trainingSection}
+${trainingSection ? 'Mirror the reference report above in structure, tone, and style as closely as the source material allows. Apply the instructions below on top of that mirrored format.\n' : ''}
+${metadata.customPrompt ? `INSTRUCTIONS FOR THIS REPORT:\n${metadata.customPrompt}\n` : ''}
 
 Claim Information:
 Claim Number: ${metadata.claimNumber}
@@ -444,13 +466,11 @@ Class of Business: ${metadata.classOfBusiness}
 Report Structure:
 ${structure}
 
-PHOTOGRAPHS SECTION:
-Review and describe all uploaded photographs in detail, explaining their relevance to the claim.
+PHOTOGRAPHS:
+${PHOTO_SECTION_INSTRUCTIONS}
 
 RISK IMPROVEMENT AND MITIGATION:
 Include a final section analyzing how to prevent similar incidents, with specific recommendations for risk reduction.
-
-Write everything in reported speech (past tense) using essay format. Avoid bullet points and AI-style formatting.
 `;
 }
 
@@ -464,7 +484,7 @@ function buildFinalPrompt(metadata) {
       } else if (mainHeadline.includes('POLICY TERMS') || mainHeadline.includes('POLICY CONDITIONS')) {
         section += '\n   Analyze policy documents thoroughly, listing applicable and non-applicable clauses.';
       } else if (mainHeadline.includes('INTERVIEW')) {
-        section += '\n   Document interviews comprehensively in reported speech.';
+        section += '\n   Document interviews comprehensively.';
       }
       if (h.subpoints && h.subpoints.length > 0) {
         section += '\n' + h.subpoints.map(s => `   ${s.number} ${s.title}`).join('\n');
@@ -472,16 +492,14 @@ function buildFinalPrompt(metadata) {
       return section;
     }).join('\n') || 'Standard final report structure';
 
+  const trainingSection = formatTrainingExamples(metadata.trainingExamples);
+
   return `
 You are preparing a Final Adjustment Report for ${metadata.classOfBusiness} insurance.
 
-${formatTrainingExamples(metadata.trainingExamples)}
-
-CRITICAL WRITING REQUIREMENTS:
-1. Write ENTIRELY in reported speech (past tense)
-2. Use essay format with flowing paragraphs - NO bullet points, NO asterisks, NO hashtags
-3. Write in natural, human language - avoid AI-style formatting
-4. Maintain professional but conversational tone throughout
+${trainingSection}
+${trainingSection ? 'Mirror the reference report above in structure, tone, and style as closely as the source material allows. Apply the instructions below on top of that mirrored format.\n' : ''}
+${metadata.customPrompt ? `INSTRUCTIONS FOR THIS REPORT:\n${metadata.customPrompt}\n` : ''}
 
 Claim Information:
 Claim Number: ${metadata.claimNumber}
@@ -494,13 +512,13 @@ Class of Business: ${metadata.classOfBusiness}
 Report Structure:
 ${structure}
 
-PHOTOGRAPHS SECTION:
-Provide detailed descriptions of all photographs, explaining what they show and their significance to the claim.
+PHOTOGRAPHS:
+${PHOTO_SECTION_INSTRUCTIONS}
 
 RISK IMPROVEMENT AND MITIGATION:
 Conclude with a comprehensive analysis of preventive measures and recommendations to avoid similar incidents in the future. Consider industry standards, safety protocols, and operational improvements.
 
-This is a final report for insurers and reinsurers. Write everything in reported speech (past tense) using essay format. Avoid all bullet points and AI-style formatting.
+This is a final report for insurers and reinsurers.
 `;
 }
 
@@ -532,7 +550,7 @@ ${isFollowUp
 CRITICAL WRITING REQUIREMENTS:
 1. Match the letterhead's own structure and section headings — do not impose the standard Scrutiny/Preliminary/Final template unless the letterhead itself uses it.
 2. Write in reported speech (past tense), essay format, no bullet points or markdown symbols in the final report body.
-3. If photographs are provided, analyze each one and integrate relevant observations into the appropriate section (or a dedicated Photographs section if the letterhead has one) rather than just listing them.
+3. If photographs are provided, integrate brief captioned references to them into the appropriate section (or a dedicated Photographs section if the letterhead has one) rather than long descriptions.
 4. Do not fabricate figures, names, or dates that are not present in the source documents.
 
 Claim Reference Details (use only where they fit the letterhead's fields):
