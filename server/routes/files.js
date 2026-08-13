@@ -47,6 +47,13 @@ const trainingUpload = upload.fields([
   { name: 'trainingReports', maxCount: 20 }
 ]);
 
+// Used by /export/docx — the frontend re-submits the same photo File
+// objects (same original filenames the LLM was told to cite) alongside the
+// report text so they can be embedded into the generated .docx.
+const exportUpload = upload.fields([
+  { name: 'photos', maxCount: 50 },
+]);
+
 const AI_MODELS = {
   claude: {
     scrutiny: 'claude-sonnet-5',
@@ -120,7 +127,7 @@ loadTrainingReportsDB();
 router.post('/upload-training', trainingUpload, async (req, res) => {
   try {
     const { metadata } = req.body;
-    
+
     if (!req.files?.trainingReports || req.files.trainingReports.length === 0) {
       return res.status(400).json({
         success: false,
@@ -129,7 +136,7 @@ router.post('/upload-training', trainingUpload, async (req, res) => {
     }
 
     const parsedMetadata = JSON.parse(metadata);
-    
+
     if (!parsedMetadata.reportType || !parsedMetadata.classOfBusiness) {
       return res.status(400).json({
         success: false,
@@ -143,19 +150,19 @@ router.post('/upload-training', trainingUpload, async (req, res) => {
 
     // Process each uploaded file
     const uploadedReports = [];
-    
+
     for (const file of req.files.trainingReports) {
       const reportId = uuidv4();
       const ext = path.extname(file.originalname);
       const newFilename = `${reportId}${ext}`;
       const newPath = path.join(trainingDir, newFilename);
-      
+
       // Move file to training directory
       await fs.rename(file.path, newPath);
-      
+
       // Extract text content for training
       const textContent = await llmService.extractTextFromFile(newPath);
-      
+
       const reportRecord = {
         id: reportId,
         filename: file.originalname,
@@ -170,14 +177,14 @@ router.post('/upload-training', trainingUpload, async (req, res) => {
         textContent: textContent.substring(0, 50000), // Store first 50k chars
         fileSize: file.size
       };
-      
+
       trainingReportsDB.push(reportRecord);
       uploadedReports.push(reportRecord);
     }
-    
+
     // Save updated database
     await saveTrainingReportsDB();
-    
+
     res.json({
       success: true,
       message: `Successfully uploaded ${uploadedReports.length} training report(s)`,
@@ -188,7 +195,7 @@ router.post('/upload-training', trainingUpload, async (req, res) => {
         classOfBusiness: r.classOfBusiness
       }))
     });
-    
+
   } catch (err) {
     console.error('Error uploading training reports:', err);
     res.status(500).json({
@@ -215,7 +222,7 @@ router.get('/training-reports', async (req, res) => {
       uploadedAt: r.uploadedAt,
       fileSize: r.fileSize
     }));
-    
+
     res.json({
       success: true,
       reports: reports
@@ -235,34 +242,34 @@ router.get('/training-reports', async (req, res) => {
 router.delete('/training-reports/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const reportIndex = trainingReportsDB.findIndex(r => r.id === id);
-    
+
     if (reportIndex === -1) {
       return res.status(404).json({
         success: false,
         message: 'Training report not found'
       });
     }
-    
+
     const report = trainingReportsDB[reportIndex];
-    
+
     // Delete the file
     try {
       await fs.unlink(report.path);
     } catch (err) {
       console.warn('Could not delete file:', err);
     }
-    
+
     // Remove from database
     trainingReportsDB.splice(reportIndex, 1);
     await saveTrainingReportsDB();
-    
+
     res.json({
       success: true,
       message: 'Training report deleted successfully'
     });
-    
+
   } catch (err) {
     console.error('Error deleting training report:', err);
     res.status(500).json({
@@ -313,9 +320,9 @@ router.post('/fetch-link', async (req, res) => {
       await fs.mkdir(tempDir, { recursive: true });
       const tempPath = path.join(tempDir, `${uuidv4()}-link-fetch`);
       await fs.writeFile(tempPath, buffer);
-      
+
       const extracted = await llmService.extractTextFromFile(tempPath).catch(() => null);
-      
+
       // Cleanup the temporary fallback fetch file
       fs.unlink(tempPath).catch(() => {});
 
@@ -425,7 +432,7 @@ router.post('/process-files', cpUpload, async (req, res) => {
         r.classOfBusiness === classOfBusiness && 
         r.reportType === reportType
       );
-      
+
       console.log(`Found ${trainingExamples.length} training examples for ${classOfBusiness} ${reportType}`);
     }
 
@@ -483,9 +490,13 @@ router.post('/process-files', cpUpload, async (req, res) => {
       ...(req.files.receipts || []).map(f => f.path),
     ].filter(Boolean);
 
+    // Pass both the on-disk path (to read bytes) and the original browser
+    // filename (so the "[Photo: ...]" marker the model is shown — and asked
+    // to cite in the report — matches what the frontend will re-upload
+    // later for DOCX export, not multer's randomized storage filename).
     const images = metadata.excludePhotos
       ? []
-      : (req.files.photos || []).map(f => f.path);
+      : (req.files.photos || []).map(f => ({ path: f.path, originalName: f.originalname }));
 
     console.log(`Processing ${reportType} report using ${aiAgent} (${model})`);
     if (trainingExamples.length > 0) {
@@ -554,7 +565,7 @@ router.post('/rework', async (req, res) => {
 
     const model = AI_MODELS[aiAgent]?.[reportType] || AI_MODELS[aiAgent]?.final;
 
-    const prompt = `You are revising an already-drafted ${classOfBusiness || ''} insurance loss adjuster's report. Apply ONLY the requested change below — preserve every other section, all figures, and the existing structure, numbering, table formatting, and institutional third-person voice exactly as they are.
+    const prompt = `You are revising an already-drafted ${classOfBusiness || ''} insurance loss adjuster's report. Apply ONLY the requested change below — preserve every other section, all figures, and the existing structure, numbering, table formatting, and institutional third-person voice exactly as they are. If the report contains "Photo: <filename> — <caption>" lines, preserve them exactly as they are (filename and caption unchanged) unless the requested change specifically concerns a photo.
 
 CLAIM CONTEXT:
 Claim Number: ${claimNumber || 'Not provided'}
@@ -590,9 +601,16 @@ Return the FULL revised report text, not just the changed section.`;
 // ────────────────────────────────────────────────
 // Export report as DOCX
 // ────────────────────────────────────────────────
-router.post('/export/docx', async (req, res) => {
+// Multipart route: the frontend sends `reportText` and `metadata` (JSON
+// string) as regular fields, plus the same `photos` File objects used to
+// generate the report, so their original filenames match the
+// "Photo: <filename> — <caption>" lines reportGenerator looks for.
+router.post('/export/docx', exportUpload, async (req, res) => {
+  const photoTempPaths = (req.files?.photos || []).map(f => f.path);
+
   try {
-    const { reportText, metadata } = req.body;
+    const { reportText } = req.body;
+    const metadata = req.body.metadata ? JSON.parse(req.body.metadata) : {};
 
     if (!reportText) {
       return res.status(400).json({
@@ -607,6 +625,12 @@ router.post('/export/docx', async (req, res) => {
     const safeName = `report-${metadata?.claimNumber || 'gen'}-${Date.now()}.docx`;
     const outputPath = path.join(outputDir, safeName);
 
+    // original filename -> path on disk, for reportGenerator to embed
+    const photoMap = {};
+    (req.files?.photos || []).forEach(f => {
+      photoMap[f.originalname] = f.path;
+    });
+
     await reportGenerator.generateReport(reportText, outputPath, {
       reportType: metadata?.reportType || 'final',
       aiAgent: metadata?.aiAgent || 'unknown',
@@ -617,7 +641,12 @@ router.post('/export/docx', async (req, res) => {
       locationOfLoss: metadata?.locationOfLoss || 'UNKNOWN',
       classOfBusiness: metadata?.classOfBusiness || '',
       generatedAt: metadata?.generatedAt || new Date().toISOString(),
-    });
+    }, photoMap);
+
+    // The photo bytes are already read into the generated .docx buffer at
+    // this point, so the temp uploads can be cleaned up now rather than
+    // waiting on the download to finish.
+    await Promise.all(photoTempPaths.map(p => fs.unlink(p).catch(() => {})));
 
     res.download(outputPath, safeName, (err) => {
       if (err) {
@@ -632,6 +661,7 @@ router.post('/export/docx', async (req, res) => {
 
   } catch (err) {
     console.error('Error exporting DOCX:', err);
+    await Promise.all(photoTempPaths.map(p => fs.unlink(p).catch(() => {})));
     res.status(500).json({
       success: false,
       message: err.message || 'Export failed'
