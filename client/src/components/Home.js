@@ -205,6 +205,40 @@ function Home() {
     setHeadlines([...headlines, { id: newId, value: '', subpoints: [] }]);
   };
 
+  // Inserts a new blank headline directly after the given one, rather than
+  // always appending to the end — lets someone drop a headline in-between
+  // existing ones without deleting and rebuilding everything below it.
+  const insertHeadlineAfter = (afterId) => {
+    setHeadlines(prev => {
+      const newId = Math.max(...prev.map(h => h.id), 0) + 1;
+      const index = prev.findIndex(h => h.id === afterId);
+      const updated = [...prev];
+      updated.splice(index + 1, 0, { id: newId, value: '', subpoints: [] });
+      return updated;
+    });
+  };
+
+  // Swaps a headline with its neighbor — reordering without deleting.
+  const moveHeadlineUp = (id) => {
+    setHeadlines(prev => {
+      const index = prev.findIndex(h => h.id === id);
+      if (index <= 0) return prev;
+      const updated = [...prev];
+      [updated[index - 1], updated[index]] = [updated[index], updated[index - 1]];
+      return updated;
+    });
+  };
+
+  const moveHeadlineDown = (id) => {
+    setHeadlines(prev => {
+      const index = prev.findIndex(h => h.id === id);
+      if (index === -1 || index >= prev.length - 1) return prev;
+      const updated = [...prev];
+      [updated[index + 1], updated[index]] = [updated[index], updated[index + 1]];
+      return updated;
+    });
+  };
+
   const removeHeadline = (id) => {
     setHeadlines(headlines.filter(h => h.id !== id));
   };
@@ -1294,54 +1328,85 @@ function Home() {
                   </div>
                 )}
 
-                {headlines.map(headline => (
-                  <Card key={headline.id} className="mb-3">
-                    <Card.Body>
-                      <div className="d-flex gap-2 mb-2">
-                        <Form.Select
-                          value={headline.value}
-                          onChange={e => updateHeadline(headline.id, e.target.value)}
-                          className="me-2"
-                        >
-                          <option value="">-- Select or type custom --</option>
-                          {DEFAULT_FOCUS_AREAS.map(area => (
-                            <option key={area} value={area}>{area}</option>
-                          ))}
-                        </Form.Select>
-                        <Form.Control
-                          placeholder={`Or type custom headline ${headline.id}`}
-                          value={!DEFAULT_FOCUS_AREAS.includes(headline.value) ? headline.value : ''}
-                          onChange={e => updateHeadline(headline.id, e.target.value)}
-                        />
-                        <Button variant="outline-danger" size="sm" onClick={() => removeHeadline(headline.id)}>
-                          Remove
-                        </Button>
-                      </div>
-
-                      {headline.subpoints.map(sub => (
-                        <div key={sub.id} className="d-flex gap-2 ms-4 mb-2">
-                          <Form.Control
-                            size="sm"
-                            placeholder={`Subpoint ${headline.id}.${sub.id}`}
-                            value={sub.value}
-                            onChange={e => updateSubpoint(headline.id, sub.id, e.target.value)}
-                          />
-                          <Button variant="outline-danger" size="sm" onClick={() => removeSubpoint(headline.id, sub.id)}>
-                            ×
-                          </Button>
-                        </div>
-                      ))}
-
-                      <Button variant="outline-secondary" size="sm" className="ms-4" onClick={() => addSubpoint(headline.id)}>
-                        + Add Subpoint
-                      </Button>
-                    </Card.Body>
-                  </Card>
-                ))}
-
-                <Button variant="outline-primary" onClick={addHeadline} className="mb-4">
+                <Button variant="outline-primary" size="sm" onClick={addHeadline} className="mb-3">
                   + Add Headline
                 </Button>
+
+                {headlines.map((headline, index) => (
+                  <React.Fragment key={headline.id}>
+                    <Card className="mb-2">
+                      <Card.Body>
+                        <div className="d-flex gap-2 mb-2">
+                          <Form.Select
+                            value={headline.value}
+                            onChange={e => updateHeadline(headline.id, e.target.value)}
+                            className="me-2"
+                          >
+                            <option value="">-- Select or type custom --</option>
+                            {DEFAULT_FOCUS_AREAS.map(area => (
+                              <option key={area} value={area}>{area}</option>
+                            ))}
+                          </Form.Select>
+                          <Form.Control
+                            placeholder={`Or type custom headline ${headline.id}`}
+                            value={!DEFAULT_FOCUS_AREAS.includes(headline.value) ? headline.value : ''}
+                            onChange={e => updateHeadline(headline.id, e.target.value)}
+                          />
+                          <Button
+                            variant="outline-secondary"
+                            size="sm"
+                            onClick={() => moveHeadlineUp(headline.id)}
+                            disabled={index === 0}
+                            title="Move up"
+                          >
+                            ↑
+                          </Button>
+                          <Button
+                            variant="outline-secondary"
+                            size="sm"
+                            onClick={() => moveHeadlineDown(headline.id)}
+                            disabled={index === headlines.length - 1}
+                            title="Move down"
+                          >
+                            ↓
+                          </Button>
+                          <Button variant="outline-danger" size="sm" onClick={() => removeHeadline(headline.id)}>
+                            Remove
+                          </Button>
+                        </div>
+
+                        {headline.subpoints.map(sub => (
+                          <div key={sub.id} className="d-flex gap-2 ms-4 mb-2">
+                            <Form.Control
+                              size="sm"
+                              placeholder={`Subpoint ${headline.id}.${sub.id}`}
+                              value={sub.value}
+                              onChange={e => updateSubpoint(headline.id, sub.id, e.target.value)}
+                            />
+                            <Button variant="outline-danger" size="sm" onClick={() => removeSubpoint(headline.id, sub.id)}>
+                              ×
+                            </Button>
+                          </div>
+                        ))}
+
+                        <Button variant="outline-secondary" size="sm" className="ms-4" onClick={() => addSubpoint(headline.id)}>
+                          + Add Subpoint
+                        </Button>
+                      </Card.Body>
+                    </Card>
+
+                    <div className="text-center mb-3">
+                      <Button
+                        variant="link"
+                        size="sm"
+                        className="text-decoration-none"
+                        onClick={() => insertHeadlineAfter(headline.id)}
+                      >
+                        + Insert headline here
+                      </Button>
+                    </div>
+                  </React.Fragment>
+                ))}
 
                 {hasInterviewsSelected && (
                   <Card className="mb-4 border-info">
