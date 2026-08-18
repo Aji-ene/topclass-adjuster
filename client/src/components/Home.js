@@ -17,21 +17,126 @@ import {
 } from 'react-bootstrap';
 import CollaborationTab from './CollaborationTab';
 
+// Alphabetized, deduplicated master list. Includes the original classes plus
+// the full expanded list supplied by the business. The Class of Business
+// fields below use an <input list="..."> combobox (Form.Control + datalist)
+// so the user can either pick from this list or type a class that isn't in
+// it — free text is accepted either way.
 const CLASSES_OF_BUSINESS = [
-  'Marine',
-  'Fire & Special Peril',
-  'Oil & Gas',
-  'Professional Indemnity',
-  'Money',
+  'Agriculture',
+  'Aircraft (Hull + Liability)',
+  'Aircraft Liability',
+  'Allied Lines',
+  'Annuity',
+  'Assistance',
+  'Aviation',
+  'Bloodstock',
+  'Boiler & Machinery',
+  'Bonds (Performance, Bid, Advance Payment, etc.)',
+  'Bonds, Credit Guarantee & Suretyship',
+  "Builders' Liability",
   'Burglary',
-  'Theft',
-  'Machinery Breakdown',
-  'GIT',
-  'Fraud',
   'Business Interruption',
+  'Capital Redemption',
+  'Climate',
+  'Combined Fire & Special Perils',
+  'Combined Fire & Special Perils + Burglary',
+  'Combined Fire & Special Perils + Burglary + Money',
+  'Commercial Motor / Fleet',
+  'Container Insurance',
+  'Contractors All Risks (CAR)',
+  'Credit Guarantee',
+  'Credit Insurance',
+  'Credit Life',
+  'Crop',
+  'Cyber',
+  'Cyber Liability',
+  'Cyber Risk',
+  'Directors & Officers (D&O)',
+  'Disability',
+  'Electronic Equipment',
+  "Employers' Liability",
+  'Engineering',
+  'Erection All Risks (EAR)',
+  'Extended Coverage',
+  'Extended Warranty',
   'Fidelity Guarantee',
+  'Financial Guarantee',
+  'Fire',
+  'Fire & Special Peril',
+  'Fire and Natural Forces',
+  'Fraud',
+  'General Accident',
+  'General Liability',
+  'GIT',
+  'Glass',
+  'Goods in Transit (GIT)',
+  'Government Assets & Employees',
+  'Group Life',
+  'Hail',
+  'Health',
+  'Healthcare Professional Indemnity',
+  'Individual Life',
+  'Individual Life (Endowment)',
+  'Individual Life (Term)',
+  'Individual Life (Universal Life)',
+  'Individual Life (Variable Life)',
+  'Individual Life (Whole Life)',
+  'Inland Marine',
+  'Legal Expenses',
+  'Linked',
+  'Livestock',
+  'Machinery Breakdown',
+  'Marine',
+  'Marine & Aviation',
+  'Marine Cargo',
+  'Marine Hull',
+  'Marine, Aviation & Transport (MAT)',
+  'Marriage and Birth',
+  'Material Damage',
+  'Medical',
+  'Medical Malpractice',
+  'Miscellaneous',
+  'Money',
+  'Money Insurance',
+  'Mortgage Guarantee',
+  'Motor',
+  'Motor Physical Damage',
+  'Motor Third-Party',
+  'Motor Third-Party Liability only',
+  'Motor Vehicle (Comprehensive)',
+  'Motor Vehicle Liability',
+  "Occupiers' Liability",
+  'Oil & Gas',
+  'Parametric',
+  'Pension',
+  'Personal Accident',
+  'Pet Insurance',
+  'Petroleum & Gas Stations',
+  'Plant All Risks',
+  'Plants All Risk',
+  'Plate Glass',
+  'Political Risk',
+  'Product Liability',
+  'Professional Indemnity',
   'Property',
+  'Property (Buildings, Contents, All Risks)',
+  'Public Liability',
+  "Shipowners' Liability",
+  'Sickness',
+  'Sprinkler Leakage',
+  'Suretyship',
+  'Terrorism',
+  'Theft',
+  'Title Insurance',
+  'Tontines (rare)',
+  'Travel',
+  'Unit-linked long-term',
+  'Warranty',
+  "Workmen's Compensation",
 ];
+
+const CLASSES_DATALIST_ID = 'classes-of-business-list';
 
 const REQUIRED_DOCUMENTS = {
   'Marine': ['Bill of Lading', 'Survey Report', 'Marine Certificate', 'Invoice', 'Packing List'],
@@ -87,6 +192,10 @@ function Home() {
       subpoints: [],
     }))
   );
+
+  // Tracks which headline is currently being drag-reordered, so we can
+  // reorder on drop and give the dragged card a visual cue.
+  const [draggedHeadlineId, setDraggedHeadlineId] = useState(null);
 
   const [interviewFields, setInterviewFields] = useState([
     { id: 1, name: '', conversation: '' }
@@ -218,25 +327,39 @@ function Home() {
     });
   };
 
-  // Swaps a headline with its neighbor — reordering without deleting.
-  const moveHeadlineUp = (id) => {
-    setHeadlines(prev => {
-      const index = prev.findIndex(h => h.id === id);
-      if (index <= 0) return prev;
-      const updated = [...prev];
-      [updated[index - 1], updated[index]] = [updated[index], updated[index - 1]];
-      return updated;
-    });
+  // Drag-to-reorder headlines. handleHeadlineDragStart marks which headline
+  // is being picked up; handleHeadlineDragOver just needs to preventDefault
+  // so the drop target accepts the drag; handleHeadlineDrop moves the
+  // dragged headline to the position it was dropped on.
+  const handleHeadlineDragStart = (id) => (e) => {
+    setDraggedHeadlineId(id);
+    e.dataTransfer.effectAllowed = 'move';
+    // Some browsers require data to be set for drag to work reliably.
+    e.dataTransfer.setData('text/plain', String(id));
   };
 
-  const moveHeadlineDown = (id) => {
+  const handleHeadlineDragOver = (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleHeadlineDrop = (targetId) => (e) => {
+    e.preventDefault();
     setHeadlines(prev => {
-      const index = prev.findIndex(h => h.id === id);
-      if (index === -1 || index >= prev.length - 1) return prev;
+      if (draggedHeadlineId === null || draggedHeadlineId === targetId) return prev;
+      const fromIndex = prev.findIndex(h => h.id === draggedHeadlineId);
+      const toIndex = prev.findIndex(h => h.id === targetId);
+      if (fromIndex === -1 || toIndex === -1) return prev;
       const updated = [...prev];
-      [updated[index + 1], updated[index]] = [updated[index], updated[index + 1]];
+      const [moved] = updated.splice(fromIndex, 1);
+      updated.splice(toIndex, 0, moved);
       return updated;
     });
+    setDraggedHeadlineId(null);
+  };
+
+  const handleHeadlineDragEnd = () => {
+    setDraggedHeadlineId(null);
   };
 
   const removeHeadline = (id) => {
@@ -770,6 +893,15 @@ function Home() {
     <Container className="py-4">
       <h1 className="mb-4 text-center">Topclass Adjusters Claims Processing</h1>
 
+      {/* Shared datalist backing every "Class of Business" combobox below.
+          Rendered once; referenced via list={CLASSES_DATALIST_ID}. Users can
+          pick an item from it or type any free-text class that isn't listed. */}
+      <datalist id={CLASSES_DATALIST_ID}>
+        {CLASSES_OF_BUSINESS.map(cls => (
+          <option key={cls} value={cls} />
+        ))}
+      </datalist>
+
       <Tabs activeKey={activeTab} onSelect={(k) => setActiveTab(k)} className="mb-4">
         {/* MERGED WORKFLOW TAB */}
         <Tab eventKey="generate" title="Generate Report">
@@ -840,15 +972,13 @@ function Home() {
                         <Col md={6}>
                           <Form.Group className="mb-3">
                             <Form.Label>Class of Business</Form.Label>
-                            <Form.Select
+                            <Form.Control
+                              list={CLASSES_DATALIST_ID}
                               value={trainingMetadata.classOfBusiness}
                               onChange={e => setTrainingMetadata({ ...trainingMetadata, classOfBusiness: e.target.value })}
-                            >
-                              <option value="">-- Select Class --</option>
-                              {CLASSES_OF_BUSINESS.map(cls => (
-                                <option key={cls} value={cls}>{cls}</option>
-                              ))}
-                            </Form.Select>
+                              placeholder="Select or type a class"
+                              autoComplete="off"
+                            />
                           </Form.Group>
                         </Col>
                       </Row>
@@ -952,15 +1082,16 @@ function Home() {
 
               <Form.Group className="mb-4">
                 <Form.Label>Select Class of Business</Form.Label>
-                <Form.Select
+                <Form.Control
+                  list={CLASSES_DATALIST_ID}
                   value={classOfBusiness}
                   onChange={e => setClassOfBusiness(e.target.value)}
-                >
-                  <option value="">-- Choose Class --</option>
-                  {CLASSES_OF_BUSINESS.map(cls => (
-                    <option key={cls} value={cls}>{cls}</option>
-                  ))}
-                </Form.Select>
+                  placeholder="Select a class, or type one if it isn't listed"
+                  autoComplete="off"
+                />
+                <Form.Text className="text-muted">
+                  Start typing to filter the list, or enter a class that isn't in it.
+                </Form.Text>
               </Form.Group>
 
               {requiredDocsList.length > 0 && (
@@ -1332,11 +1463,29 @@ function Home() {
                   + Add Headline
                 </Button>
 
+                <p className="text-muted small mb-2">
+                  Drag a headline by its <strong>☰ Drag</strong> handle to reorder it.
+                </p>
+
                 {headlines.map((headline, index) => (
                   <React.Fragment key={headline.id}>
-                    <Card className="mb-2">
+                    <Card
+                      className={`mb-2${draggedHeadlineId === headline.id ? ' opacity-50' : ''}`}
+                      onDragOver={handleHeadlineDragOver}
+                      onDrop={handleHeadlineDrop(headline.id)}
+                    >
                       <Card.Body>
-                        <div className="d-flex gap-2 mb-2">
+                        <div className="d-flex gap-2 mb-2 align-items-center">
+                          <span
+                            draggable
+                            onDragStart={handleHeadlineDragStart(headline.id)}
+                            onDragEnd={handleHeadlineDragEnd}
+                            title="Drag to reorder"
+                            className="d-flex align-items-center gap-1 px-2 border rounded text-muted"
+                            style={{ cursor: 'grab', userSelect: 'none', whiteSpace: 'nowrap' }}
+                          >
+                            ☰ Drag
+                          </span>
                           <Form.Select
                             value={headline.value}
                             onChange={e => updateHeadline(headline.id, e.target.value)}
@@ -1352,24 +1501,6 @@ function Home() {
                             value={!DEFAULT_FOCUS_AREAS.includes(headline.value) ? headline.value : ''}
                             onChange={e => updateHeadline(headline.id, e.target.value)}
                           />
-                          <Button
-                            variant="outline-secondary"
-                            size="sm"
-                            onClick={() => moveHeadlineUp(headline.id)}
-                            disabled={index === 0}
-                            title="Move up"
-                          >
-                            ↑
-                          </Button>
-                          <Button
-                            variant="outline-secondary"
-                            size="sm"
-                            onClick={() => moveHeadlineDown(headline.id)}
-                            disabled={index === headlines.length - 1}
-                            title="Move down"
-                          >
-                            ↓
-                          </Button>
                           <Button variant="outline-danger" size="sm" onClick={() => removeHeadline(headline.id)}>
                             Remove
                           </Button>
