@@ -17,11 +17,6 @@ import {
 } from 'react-bootstrap';
 import CollaborationTab from './CollaborationTab';
 
-// Alphabetized, deduplicated master list. Includes the original classes plus
-// the full expanded list supplied by the business. The Class of Business
-// fields below use an <input list="..."> combobox (Form.Control + datalist)
-// so the user can either pick from this list or type a class that isn't in
-// it — free text is accepted either way.
 const CLASSES_OF_BUSINESS = [
   'Agriculture',
   'Aircraft (Hull + Liability)',
@@ -136,8 +131,6 @@ const CLASSES_OF_BUSINESS = [
   "Workmen's Compensation",
 ];
 
-const CLASSES_DATALIST_ID = 'classes-of-business-list';
-
 const REQUIRED_DOCUMENTS = {
   'Marine': ['Bill of Lading', 'Survey Report', 'Marine Certificate', 'Invoice', 'Packing List'],
   'Fire & Special Peril': ['Fire Service Report', 'Police Report', 'Building Valuation', 'Inventory List'],
@@ -192,10 +185,6 @@ function Home() {
       subpoints: [],
     }))
   );
-
-  // Tracks which headline is currently being drag-reordered, so we can
-  // reorder on drop and give the dragged card a visual cue.
-  const [draggedHeadlineId, setDraggedHeadlineId] = useState(null);
 
   const [interviewFields, setInterviewFields] = useState([
     { id: 1, name: '', conversation: '' }
@@ -327,39 +316,25 @@ function Home() {
     });
   };
 
-  // Drag-to-reorder headlines. handleHeadlineDragStart marks which headline
-  // is being picked up; handleHeadlineDragOver just needs to preventDefault
-  // so the drop target accepts the drag; handleHeadlineDrop moves the
-  // dragged headline to the position it was dropped on.
-  const handleHeadlineDragStart = (id) => (e) => {
-    setDraggedHeadlineId(id);
-    e.dataTransfer.effectAllowed = 'move';
-    // Some browsers require data to be set for drag to work reliably.
-    e.dataTransfer.setData('text/plain', String(id));
-  };
-
-  const handleHeadlineDragOver = (e) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-  };
-
-  const handleHeadlineDrop = (targetId) => (e) => {
-    e.preventDefault();
+  // Swaps a headline with its neighbor — reordering without deleting.
+  const moveHeadlineUp = (id) => {
     setHeadlines(prev => {
-      if (draggedHeadlineId === null || draggedHeadlineId === targetId) return prev;
-      const fromIndex = prev.findIndex(h => h.id === draggedHeadlineId);
-      const toIndex = prev.findIndex(h => h.id === targetId);
-      if (fromIndex === -1 || toIndex === -1) return prev;
+      const index = prev.findIndex(h => h.id === id);
+      if (index <= 0) return prev;
       const updated = [...prev];
-      const [moved] = updated.splice(fromIndex, 1);
-      updated.splice(toIndex, 0, moved);
+      [updated[index - 1], updated[index]] = [updated[index], updated[index - 1]];
       return updated;
     });
-    setDraggedHeadlineId(null);
   };
 
-  const handleHeadlineDragEnd = () => {
-    setDraggedHeadlineId(null);
+  const moveHeadlineDown = (id) => {
+    setHeadlines(prev => {
+      const index = prev.findIndex(h => h.id === id);
+      if (index === -1 || index >= prev.length - 1) return prev;
+      const updated = [...prev];
+      [updated[index + 1], updated[index]] = [updated[index], updated[index + 1]];
+      return updated;
+    });
   };
 
   const removeHeadline = (id) => {
@@ -893,15 +868,6 @@ function Home() {
     <Container className="py-4">
       <h1 className="mb-4 text-center">Topclass Adjusters Claims Processing</h1>
 
-      {/* Shared datalist backing every "Class of Business" combobox below.
-          Rendered once; referenced via list={CLASSES_DATALIST_ID}. Users can
-          pick an item from it or type any free-text class that isn't listed. */}
-      <datalist id={CLASSES_DATALIST_ID}>
-        {CLASSES_OF_BUSINESS.map(cls => (
-          <option key={cls} value={cls} />
-        ))}
-      </datalist>
-
       <Tabs activeKey={activeTab} onSelect={(k) => setActiveTab(k)} className="mb-4">
         {/* MERGED WORKFLOW TAB */}
         <Tab eventKey="generate" title="Generate Report">
@@ -972,13 +938,15 @@ function Home() {
                         <Col md={6}>
                           <Form.Group className="mb-3">
                             <Form.Label>Class of Business</Form.Label>
-                            <Form.Control
-                              list={CLASSES_DATALIST_ID}
+                            <Form.Select
                               value={trainingMetadata.classOfBusiness}
                               onChange={e => setTrainingMetadata({ ...trainingMetadata, classOfBusiness: e.target.value })}
-                              placeholder="Select or type a class"
-                              autoComplete="off"
-                            />
+                            >
+                              <option value="">-- Select Class --</option>
+                              {CLASSES_OF_BUSINESS.map(cls => (
+                                <option key={cls} value={cls}>{cls}</option>
+                              ))}
+                            </Form.Select>
                           </Form.Group>
                         </Col>
                       </Row>
@@ -1082,16 +1050,15 @@ function Home() {
 
               <Form.Group className="mb-4">
                 <Form.Label>Select Class of Business</Form.Label>
-                <Form.Control
-                  list={CLASSES_DATALIST_ID}
+                <Form.Select
                   value={classOfBusiness}
                   onChange={e => setClassOfBusiness(e.target.value)}
-                  placeholder="Select a class, or type one if it isn't listed"
-                  autoComplete="off"
-                />
-                <Form.Text className="text-muted">
-                  Start typing to filter the list, or enter a class that isn't in it.
-                </Form.Text>
+                >
+                  <option value="">-- Choose Class --</option>
+                  {CLASSES_OF_BUSINESS.map(cls => (
+                    <option key={cls} value={cls}>{cls}</option>
+                  ))}
+                </Form.Select>
               </Form.Group>
 
               {requiredDocsList.length > 0 && (
@@ -1463,29 +1430,11 @@ function Home() {
                   + Add Headline
                 </Button>
 
-                <p className="text-muted small mb-2">
-                  Drag a headline by its <strong>☰ Drag</strong> handle to reorder it.
-                </p>
-
                 {headlines.map((headline, index) => (
                   <React.Fragment key={headline.id}>
-                    <Card
-                      className={`mb-2${draggedHeadlineId === headline.id ? ' opacity-50' : ''}`}
-                      onDragOver={handleHeadlineDragOver}
-                      onDrop={handleHeadlineDrop(headline.id)}
-                    >
+                    <Card className="mb-2">
                       <Card.Body>
-                        <div className="d-flex gap-2 mb-2 align-items-center">
-                          <span
-                            draggable
-                            onDragStart={handleHeadlineDragStart(headline.id)}
-                            onDragEnd={handleHeadlineDragEnd}
-                            title="Drag to reorder"
-                            className="d-flex align-items-center gap-1 px-2 border rounded text-muted"
-                            style={{ cursor: 'grab', userSelect: 'none', whiteSpace: 'nowrap' }}
-                          >
-                            ☰ Drag
-                          </span>
+                        <div className="d-flex gap-2 mb-2">
                           <Form.Select
                             value={headline.value}
                             onChange={e => updateHeadline(headline.id, e.target.value)}
@@ -1501,6 +1450,24 @@ function Home() {
                             value={!DEFAULT_FOCUS_AREAS.includes(headline.value) ? headline.value : ''}
                             onChange={e => updateHeadline(headline.id, e.target.value)}
                           />
+                          <Button
+                            variant="outline-secondary"
+                            size="sm"
+                            onClick={() => moveHeadlineUp(headline.id)}
+                            disabled={index === 0}
+                            title="Move up"
+                          >
+                            ↑
+                          </Button>
+                          <Button
+                            variant="outline-secondary"
+                            size="sm"
+                            onClick={() => moveHeadlineDown(headline.id)}
+                            disabled={index === headlines.length - 1}
+                            title="Move down"
+                          >
+                            ↓
+                          </Button>
                           <Button variant="outline-danger" size="sm" onClick={() => removeHeadline(headline.id)}>
                             Remove
                           </Button>
